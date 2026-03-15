@@ -1,0 +1,47 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "⬇  Download Voice Model (~1.87 GB)",
+      "type": "shell",
+      "command": "venv/bin/python3 download_model.py",
+      "options": {
+        "cwd": "${workspaceFolder}/aura_voice",
+        "env": { "COQUI_TOS_AGREED": "1" }
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "new",
+        "clear": true,
+        "focus": true
+      },
+      "group": "build",
+      "problemMatcher": []
+    },
+    {
+      "label": "▶  Run AURA VOICE",
+      "type": "shell",
+      "command": "venv/bin/python3 main.py",
+      "options": {
+        "cwd": "${workspaceFolder}/aura_voice",
+        "env": { "COQUI_TOS_AGREED": "1" }
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "new",
+        "clear": true
+      },
+      "group": { "kind": "test", "isDefault": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "🔧  First Time Setup (setup.sh)",
+      "type": "shell",
+      "command": "bash setup.sh",
+      "options": { "cwd": "${workspaceFolder}/aura_voice" },
+      "presentation": { "reveal": "always", "panel": "new" },
+      "group": "build",
+      "problemMatcher": []
+    }
+  ]
+}

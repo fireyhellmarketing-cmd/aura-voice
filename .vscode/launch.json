@@ -1,0 +1,27 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "▶  Run AURA VOICE",
+      "type": "python",
+      "request": "launch",
+      "program": "${workspaceFolder}/aura_voice/main.py",
+      "python": "${workspaceFolder}/aura_voice/venv/bin/python3",
+      "cwd": "${workspaceFolder}/aura_voice",
+      "env": { "COQUI_TOS_AGREED": "1" },
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      "name": "⬇  Download Voice Model",
+      "type": "python",
+      "request": "launch",
+      "program": "${workspaceFolder}/aura_voice/download_model.py",
+      "python": "${workspaceFolder}/aura_voice/venv/bin/python3",
+      "cwd": "${workspaceFolder}/aura_voice",
+      "env": { "COQUI_TOS_AGREED": "1" },
+      "console": "integratedTerminal",
+      "justMyCode": false
+    }
+  ]
+}

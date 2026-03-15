@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environment
+venv/
+.venv/
+env/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# VS Code
+.vscode/settings.json
+
+# Model cache (large files — download separately)
+*.pth
+*.bin
+*.onnx
+*.safetensors
+
+# Audio output (user-generated)
+*.wav
+*.mp3
+*.ogg
+
+# Thumbnails (generated at runtime)
+thumbnails/
+
+# Logs
+*.log
+logs/
+
+# Config (user-specific)
+~/.aura_voice_config.json
+
+# Temp
+tmp/
+temp/
+aura_voice_*/
