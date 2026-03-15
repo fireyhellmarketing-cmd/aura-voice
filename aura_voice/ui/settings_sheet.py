@@ -68,7 +68,7 @@ class SettingsSheet(ctk.CTkFrame):
         # Start hidden off-screen right
         parent.update_idletasks()
         win_w = parent.winfo_width()
-        self.place(x=win_w, y=0, relheight=1.0, width=_SHEET_W)
+        self.place(x=win_w, y=0, relheight=1.0)
         self.lift()
 
     # ── Build ──────────────────────────────────────────────────────────────────
@@ -399,7 +399,7 @@ class SettingsSheet(ctk.CTkFrame):
         end_x   = win_w - _SHEET_W
 
         # Ensure it's placed and visible
-        self.place(x=start_x, y=0, relheight=1.0, width=_SHEET_W)
+        self.place(x=start_x, y=0, relheight=1.0)
         self.lift()
 
         step    = (start_x - end_x) / _SLIDE_STEPS
@@ -407,11 +407,11 @@ class SettingsSheet(ctk.CTkFrame):
 
         def _step(current_x: float, step_num: int):
             new_x = current_x - step
-            self.place(x=int(new_x), y=0, relheight=1.0, width=_SHEET_W)
+            self.place(x=int(new_x), y=0, relheight=1.0)
             if step_num < _SLIDE_STEPS:
                 self.after(delay, lambda: _step(new_x, step_num + 1))
             else:
-                self.place(x=end_x, y=0, relheight=1.0, width=_SHEET_W)
+                self.place(x=end_x, y=0, relheight=1.0)
                 self._animating = False
 
         _step(float(start_x), 1)
@@ -431,7 +431,7 @@ class SettingsSheet(ctk.CTkFrame):
 
         def _step(current_x: float, step_num: int):
             new_x = current_x + step
-            self.place(x=int(new_x), y=0, relheight=1.0, width=_SHEET_W)
+            self.place(x=int(new_x), y=0, relheight=1.0)
             if step_num < _SLIDE_STEPS:
                 self.after(delay, lambda: _step(new_x, step_num + 1))
             else:
