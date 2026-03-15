@@ -19,7 +19,7 @@ import customtkinter as ctk
 from assets.styles import (
     APP_NAME, APP_VERSION, APP_TAGLINE,
     FONTS, PAD, WINDOW,
-    BG_DEEP, SURFACE, BORDER, BORDER2,
+    BG_DEEP, SURFACE, SURFACE2, SURFACE3, BORDER, BORDER2,
     ACCENT, ACCENT_HOV,
     TEXT, TEXT_SUB, TEXT_DIM,
     ACCENT_DIM,
@@ -135,11 +135,13 @@ class AuraVoiceApp(ctk.CTk):
         self.title(self.WINDOW_TITLE)
         self.geometry(f"{WINDOW['width']}x{WINDOW['height']}")
         self.minsize(WINDOW['min_width'], WINDOW['min_height'])
+        self.resizable(True, True)
         self.configure(fg_color=BG_DEEP)
 
         self._build_menu()
         self._build_ui()
         self._start_poll()
+        self._start_stats_poll()
 
         # Load model after window is ready
         self.after(400, self._check_model)
@@ -189,7 +191,8 @@ class AuraVoiceApp(ctk.CTk):
     def _build_ui(self):
         self.rowconfigure(0, weight=0)  # title bar
         self.rowconfigure(1, weight=1)  # body
-        self.rowconfigure(2, weight=0)  # terminal
+        self.rowconfigure(2, weight=0)  # stats bar
+        self.rowconfigure(3, weight=0)  # terminal
         self.columnconfigure(0, weight=1)
 
         # Title bar
@@ -212,12 +215,15 @@ class AuraVoiceApp(ctk.CTk):
             self._config.get("output_format", "WAV")
         )
 
-        # Terminal (collapsible, row 2)
+        # Stats bar (row 2) — CPU / RAM / Model
+        self._build_stats_bar()
+
+        # Terminal (collapsible, row 3)
         self._terminal = TerminalWidget(
             self,
             cwd=str(Path(__file__).resolve().parent.parent),
         )
-        self._terminal.grid(row=2, column=0, sticky="ew")
+        self._terminal.grid(row=3, column=0, sticky="ew")
 
         # Settings sheet (placed over body, starts off-screen)
         self._settings_sheet = SettingsSheet(
@@ -282,6 +288,50 @@ class AuraVoiceApp(ctk.CTk):
         # Bind hover to change color
         self._gear_btn.bind("<Enter>", lambda *_: self._gear_btn.configure(text_color=ACCENT_HOV))
         self._gear_btn.bind("<Leave>", lambda *_: self._gear_btn.configure(text_color=TEXT_DIM))
+
+    # ── Stats bar ──────────────────────────────────────────────────────────────
+
+    def _build_stats_bar(self):
+        bar = ctk.CTkFrame(self, fg_color=SURFACE3, corner_radius=0, height=24)
+        bar.grid(row=2, column=0, sticky="ew")
+        bar.grid_propagate(False)
+        bar.columnconfigure(0, weight=1)
+
+        self._stats_label = ctk.CTkLabel(
+            bar,
+            text="CPU: —   RAM: —   Model: —",
+            font=FONTS["mono_xs"],
+            text_color=TEXT_DIM,
+            anchor="center",
+        )
+        self._stats_label.grid(row=0, column=0, sticky="ew", padx=PAD["md"])
+
+    def _start_stats_poll(self):
+        self._update_stats_bar()
+
+    def _update_stats_bar(self):
+        try:
+            import psutil
+            cpu = psutil.cpu_percent(interval=None)
+            ram_bytes = psutil.virtual_memory().used
+            ram_gb = ram_bytes / (1024 ** 3)
+            cpu_str = f"CPU: {cpu:.0f}%"
+            ram_str = f"RAM: {ram_gb:.1f} GB"
+        except Exception:
+            cpu_str = "CPU: —"
+            ram_str = "RAM: —"
+
+        model_name = self._config.get("selected_model", "—")
+        short_model = model_name.split("—")[0].strip()
+
+        try:
+            self._stats_label.configure(
+                text=f"{cpu_str}   {ram_str}   Model: {short_model}"
+            )
+        except Exception:
+            pass
+
+        self.after(3000, self._update_stats_bar)
 
     # ── Settings sheet ─────────────────────────────────────────────────────────
 
@@ -622,11 +672,12 @@ class AuraVoiceApp(ctk.CTk):
             c, t = payload
             self._gen_done = c - 1
             self._terminal.write(f"  chunk {c}/{t}\n", "green")
+            self._main_view.update_chunk_progress(c, t, 0.0)
 
         elif kind == _Q_CHUNK_DONE:
-            c, t, _eta = payload
+            c, t, eta = payload
             self._gen_done = c
-            del t, _eta  # consumed by engine; not displayed in this layout
+            self._main_view.update_chunk_progress(c, t, eta)
 
         elif kind == _Q_STITCH_START:
             self._terminal.write("[Generate] Stitching audio…\n", "blue")

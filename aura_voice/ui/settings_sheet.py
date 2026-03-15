@@ -175,18 +175,130 @@ class SettingsSheet(ctk.CTkFrame):
         ).pack(fill="x", padx=PAD["md"], pady=(0, PAD["md"]))
 
     def _open_model_selector(self):
-        """Show a compact model picker dialog."""
-        from tkinter import messagebox
-        lines = []
-        for name, spec in MODEL_CATALOG.items():
-            dl  = is_model_downloaded(spec["model_id"])
-            tag = "✓" if dl else "⬇"
-            lines.append(f"{tag} {name}  ({spec.get('size_gb', 0):.2f} GB)")
+        """Show a proper CTkToplevel model picker dialog."""
+        win = ctk.CTkToplevel(self._parent)
+        win.title("Change Voice Model")
+        win.geometry("500x520")
+        win.resizable(False, True)
+        win.configure(fg_color=BG_DEEP)
+        win.grab_set()
+        win.focus_set()
 
-        messagebox.showinfo(
-            "Available Models",
-            "\n".join(lines) + "\n\nTo change the model, use the main menu → View → Settings.",
+        # Header
+        hdr = ctk.CTkFrame(win, fg_color=SURFACE, corner_radius=0, height=52)
+        hdr.pack(fill="x")
+        hdr.pack_propagate(False)
+        ctk.CTkLabel(
+            hdr,
+            text="Change Voice Model",
+            font=(FONTS["lg_bold"][0], 15, "bold"),
+            text_color=TEXT,
+        ).pack(side="left", padx=PAD["xl"], pady=12)
+
+        ctk.CTkFrame(win, fg_color=BORDER, height=1).pack(fill="x")
+
+        # Scrollable model list
+        scroll = ctk.CTkScrollableFrame(
+            win,
+            fg_color="transparent",
+            scrollbar_button_color=BORDER2,
+            scrollbar_button_hover_color=BORDER,
         )
+        scroll.pack(fill="both", expand=True, padx=PAD["xl"], pady=PAD["md"])
+
+        current = self.config.get("selected_model", "")
+
+        for name, spec in MODEL_CATALOG.items():
+            dl = is_model_downloaded(spec.get("model_id", ""))
+            size_str = f"{spec.get('size_gb', 0):.2f} GB"
+            is_current = (name == current)
+
+            row = ctk.CTkFrame(
+                scroll,
+                fg_color=SURFACE if not is_current else "#1E2A1E",
+                corner_radius=RADIUS["md"],
+                border_color=SUCCESS if is_current else BORDER2,
+                border_width=1,
+            )
+            row.pack(fill="x", pady=(0, PAD["sm"]))
+
+            info = ctk.CTkFrame(row, fg_color="transparent")
+            info.pack(side="left", fill="both", expand=True, padx=PAD["md"], pady=PAD["md"])
+
+            ctk.CTkLabel(
+                info,
+                text=name,
+                font=FONTS["sm_bold"],
+                text_color=TEXT,
+                anchor="w",
+                wraplength=260,
+            ).pack(anchor="w")
+
+            meta_row = ctk.CTkFrame(info, fg_color="transparent")
+            meta_row.pack(anchor="w", pady=(3, 0))
+
+            ctk.CTkLabel(
+                meta_row,
+                text=f"  {size_str}  ",
+                font=FONTS["xs"],
+                text_color=TEXT_DIM,
+                fg_color=BORDER,
+                corner_radius=RADIUS["full"],
+            ).pack(side="left", padx=(0, 4))
+
+            badge_text  = "  ✓ Downloaded  " if dl else "  ⬇ Not Downloaded  "
+            badge_color = SUCCESS if dl else WARNING
+            badge_bg    = SUCCESS_BG if dl else "#451a03"
+            ctk.CTkLabel(
+                meta_row,
+                text=badge_text,
+                font=FONTS["xs_bold"],
+                text_color=badge_color,
+                fg_color=badge_bg,
+                corner_radius=RADIUS["full"],
+            ).pack(side="left")
+
+            btn_col = ctk.CTkFrame(row, fg_color="transparent")
+            btn_col.pack(side="right", padx=PAD["md"], pady=PAD["md"])
+
+            if is_current:
+                ctk.CTkLabel(
+                    btn_col,
+                    text="  Active  ",
+                    font=FONTS["xs_bold"],
+                    text_color=SUCCESS,
+                    fg_color=SUCCESS_BG,
+                    corner_radius=RADIUS["full"],
+                ).pack()
+            else:
+                def _select(n=name, w=win):
+                    self.config["selected_model"] = n
+                    save_config(self.config)
+                    self._emit_change()
+                    w.destroy()
+
+                ctk.CTkButton(
+                    btn_col,
+                    text="Select",
+                    width=64, height=28,
+                    fg_color=SURFACE2,
+                    hover_color="#2A2A2A",
+                    text_color=TEXT_SUB,
+                    border_color=BORDER2,
+                    border_width=1,
+                    corner_radius=RADIUS["md"],
+                    font=FONTS["sm"],
+                    command=_select,
+                ).pack()
+
+        # Footer note
+        ctk.CTkFrame(win, fg_color=BORDER, height=1).pack(fill="x", padx=PAD["xl"])
+        ctk.CTkLabel(
+            win,
+            text="Close and reopen the app to load the new model.",
+            font=FONTS["xs"],
+            text_color=TEXT_DIM,
+        ).pack(pady=PAD["md"])
 
     # ── Section: Output ────────────────────────────────────────────────────────
 

@@ -1,5 +1,5 @@
 """AURA VOICE v2 — Complete design system and style definitions.
-Aesthetic: Freepik Pikaso — dark near-black, violet accent, amber highlights.
+Aesthetic: ChatGPT-style black & white — near-black backgrounds, white accents.
 """
 
 import platform as _platform
@@ -12,65 +12,72 @@ FORMAT_ID   = "auravoice_v2"
 
 # ─── Window Geometry ───────────────────────────────────────────────────────────
 WINDOW = {
-    "width":      900,
-    "height":     780,
-    "min_width":  760,
-    "min_height": 600,
+    "width":      1100,
+    "height":     700,
+    "min_width":  800,
+    "min_height": 560,
 }
 
-# ─── New Design-System Colors (v3 redesign) ────────────────────────────────────
-BG_DEEP    = "#0A090F"    # near-black with violet undertone
-SURFACE    = "#110F1A"    # cards / inputs
-SURFACE2   = "#130F1E"    # slightly lighter surface
-ACCENT_HOV = "#9D5CF5"    # hover violet
-BORDER     = "#1E1B2E"    # subtle border
-BORDER2    = "#2A2540"    # slightly lighter border
-TEXT       = "#F1F5F9"    # primary text
-TEXT_SUB   = "#9D8FC4"    # secondary / muted
-TEXT_DIM   = "#6B6880"    # very muted labels
-TEXT_GHOST = "#3D3A52"    # placeholder / ghost
-ACCENT_DIM2 = "#5B21B6"   # darker violet for gradients (v3 name avoids clash)
+# ─── Design-System Colors (ChatGPT-style black & white) ────────────────────────
+BG_DEEP    = "#0D0D0D"   # near-black (ChatGPT sidebar bg)
+SURFACE    = "#1A1A1A"   # slightly lighter (ChatGPT input area)
+SURFACE2   = "#212121"   # card surfaces (ChatGPT message bg)
+SURFACE3   = "#2A2A2A"   # slightly lighter card (stats bar bg)
+ACCENT     = "#FFFFFF"   # white (buttons, active states)
+ACCENT_HOV = "#E5E5E5"   # slightly off-white on hover
+BORDER     = "#2D2D2D"   # subtle border
+BORDER2    = "#3D3D3D"   # slightly lighter border
+TEXT       = "#FFFFFF"   # primary text white
+TEXT_SUB   = "#ABABAB"   # secondary text (ChatGPT grey)
+TEXT_DIM   = "#6B6B6B"   # muted labels
+TEXT_GHOST = "#454545"   # placeholder text
+ACCENT_DIM = "#2D2D2D"   # disabled button bg
+SUCCESS    = "#10A37F"   # ChatGPT green
+SUCCESS_BG = "#0A2E22"
+WARNING    = "#F5A623"
+ERROR      = "#EF4444"
+ERROR_BG   = "#450A0A"
 
 # ─── Color Palette ─────────────────────────────────────────────────────────────
 COLORS = {
     # Backgrounds
-    "bg":           "#0A090F",
-    "sidebar":      "#111118",
-    "panel":        "#110F1A",
-    "card":         "#130F1E",
-    "card_hover":   "#1A1630",
-    "input_bg":     "#110F1A",
+    "bg":           BG_DEEP,
+    "sidebar":      "#111111",
+    "panel":        SURFACE,
+    "card":         SURFACE2,
+    "card_hover":   "#2A2A2A",
+    "input_bg":     SURFACE,
 
     # Accents
-    "accent":           "#7c3aed",
-    "accent_hover":     "#9D5CF5",
-    "accent_dim":       "#5B21B6",
-    "accent2":          "#f59e0b",
-    "accent2_hover":    "#fbbf24",
+    "accent":           ACCENT,
+    "accent_hover":     ACCENT_HOV,
+    "accent_dim":       ACCENT_DIM,
+    "accent2":          "#F5A623",
+    "accent2_hover":    "#FBBF24",
 
     # Text
-    "text":         "#F1F5F9",
-    "text_sub":     "#9D8FC4",
-    "text_muted":   "#6B6880",
-    "text_dim":     "#3D3A52",
+    "text":         TEXT,
+    "text_sub":     TEXT_SUB,
+    "text_muted":   TEXT_DIM,
+    "text_dim":     TEXT_GHOST,
 
     # Semantic
-    "success":      "#10b981",
-    "success_bg":   "#064e3b",
-    "warning":      "#f59e0b",
-    "warning_bg":   "#451a03",
-    "error":        "#ef4444",
-    "error_bg":     "#450a0a",
+    "success":      SUCCESS,
+    "success_bg":   SUCCESS_BG,
+    "warning":      WARNING,
+    "warning_bg":   "#3D2800",
+    "error":        ERROR,
+    "error_bg":     ERROR_BG,
 
     # Borders
-    "border":       "#1E1B2E",
-    "border_light": "#2A2540",
+    "border":       BORDER,
+    "border_light": BORDER2,
 
     # Components
-    "scrollbar":        "#1E1B2E",
-    "progress_track":   "#1E1B2E",
-    "progress_fill":    "#7c3aed",
-    "selection":        "#5B21B6",
+    "scrollbar":        BORDER,
+    "progress_track":   BORDER,
+    "progress_fill":    ACCENT,
+    "selection":        BORDER2,
 }
 
 # Flat aliases for convenience
@@ -80,19 +87,17 @@ PANEL         = COLORS["panel"]
 CARD          = COLORS["card"]
 CARD_HOVER    = COLORS["card_hover"]
 INPUT_BG      = COLORS["input_bg"]
-ACCENT        = COLORS["accent"]
-ACCENT_HOVER  = COLORS["accent_hover"]
-ACCENT_DIM    = COLORS["accent_dim"]
+ACCENT_HOVER  = ACCENT_HOV
 ACCENT2       = COLORS["accent2"]
 ACCENT2_HOVER = COLORS["accent2_hover"]
-TEXT_MUTED    = COLORS["text_muted"]
-SUCCESS       = COLORS["success"]
-SUCCESS_BG    = COLORS["success_bg"]
-WARNING       = COLORS["warning"]
+TEXT_MUTED    = TEXT_DIM
 WARNING_BG    = COLORS["warning_bg"]
-ERROR         = COLORS["error"]
-ERROR_BG      = COLORS["error_bg"]
-BORDER_LIGHT  = COLORS["border_light"]
+BORDER_LIGHT  = BORDER2
+
+SURFACE3      = COLORS.get("card_hover", "#2A2A2A")   # stats bar bg
+
+# Legacy aliases for terminal_widget.py compatibility
+ACCENT_DIM2   = ACCENT_DIM
 
 # ─── Typography ────────────────────────────────────────────────────────────────
 _OS = _platform.system()
@@ -227,11 +232,11 @@ ACCENT_PRESETS = [
 # ─── Component Style Helpers ───────────────────────────────────────────────────
 
 def btn_primary() -> dict:
-    """Kwargs for a primary violet action button."""
+    """Kwargs for a primary white action button (ChatGPT-style)."""
     return {
-        "fg_color":      ACCENT,
-        "hover_color":   ACCENT_HOVER,
-        "text_color":    TEXT,
+        "fg_color":      "#FFFFFF",
+        "hover_color":   "#E5E5E5",
+        "text_color":    "#000000",
         "corner_radius": RADIUS["md"],
         "font":          FONTS["md_bold"],
     }
@@ -239,10 +244,10 @@ def btn_primary() -> dict:
 def btn_secondary() -> dict:
     """Kwargs for a secondary/outlined button."""
     return {
-        "fg_color":      CARD,
-        "hover_color":   CARD_HOVER,
+        "fg_color":      SURFACE2,
+        "hover_color":   "#2A2A2A",
         "text_color":    TEXT_SUB,
-        "border_color":  BORDER_LIGHT,
+        "border_color":  BORDER2,
         "border_width":  1,
         "corner_radius": RADIUS["md"],
         "font":          FONTS["base"],
@@ -252,7 +257,7 @@ def btn_ghost() -> dict:
     """Kwargs for a transparent ghost button."""
     return {
         "fg_color":      "transparent",
-        "hover_color":   CARD_HOVER,
+        "hover_color":   BORDER,
         "text_color":    TEXT_SUB,
         "corner_radius": RADIUS["sm"],
         "font":          FONTS["base"],
@@ -261,7 +266,7 @@ def btn_ghost() -> dict:
 def card_frame() -> dict:
     """Kwargs for a standard card CTkFrame."""
     return {
-        "fg_color":      CARD,
+        "fg_color":      SURFACE2,
         "corner_radius": RADIUS["lg"],
         "border_color":  BORDER,
         "border_width":  1,
@@ -270,8 +275,8 @@ def card_frame() -> dict:
 def input_field() -> dict:
     """Kwargs for CTkEntry / CTkTextbox."""
     return {
-        "fg_color":      INPUT_BG,
-        "border_color":  BORDER_LIGHT,
+        "fg_color":      SURFACE,
+        "border_color":  BORDER2,
         "border_width":  1,
         "text_color":    TEXT,
         "corner_radius": RADIUS["md"],
@@ -284,7 +289,7 @@ def label_sub() -> dict:
     return {"text_color": TEXT_SUB, "font": FONTS["base"]}
 
 def label_muted() -> dict:
-    return {"text_color": TEXT_MUTED, "font": FONTS["sm"]}
+    return {"text_color": TEXT_DIM, "font": FONTS["sm"]}
 
 # ─── CustomTkinter Theme Bootstrap ────────────────────────────────────────────
 

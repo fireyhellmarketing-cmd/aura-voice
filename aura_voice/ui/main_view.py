@@ -18,9 +18,10 @@ from assets.styles import (
     TEXT, TEXT_SUB, TEXT_DIM, TEXT_GHOST,
     ACCENT_DIM,
     FONTS, PAD, RADIUS,
+    SURFACE3,
 )
 
-# ─── Voice / Style data (mirrored from controls_panel for standalone use) ──────
+# ─── Voice / Style data ────────────────────────────────────────────────────────
 
 VOICE_PROFILES = [
     "Natural Female",
@@ -57,7 +58,7 @@ DEFAULT_OUTPUT_DIR = str(Path.home() / "Documents" / "AuraVoice")
 _MAX_CHARS = 5000
 
 
-# ─── GenerationRecord (lightweight) ───────────────────────────────────────────
+# ─── GenerationRecord ─────────────────────────────────────────────────────────
 
 class GenerationRecord:
     def __init__(
@@ -90,8 +91,8 @@ class MainView(ctk.CTkFrame):
       5. Output card (hidden until generation completes)
     """
 
-    COLUMN_FRACTION = 0.68
-    COLUMN_MAX      = 680
+    COLUMN_FRACTION = 0.72
+    COLUMN_MAX      = 760
 
     def __init__(self, parent, **kwargs):
         super().__init__(parent, fg_color=BG_DEEP, corner_radius=0, **kwargs)
@@ -115,9 +116,12 @@ class MainView(ctk.CTkFrame):
         self._play_duration  = 0
         self._current_output: Optional[Path] = None
 
+        # Generation progress state
+        self._gen_total = 0
+
         # StringVars
-        self._voice_var  = ctk.StringVar(value="Natural Female")
-        self._speed_var  = ctk.StringVar(value="1.00×")
+        self._voice_var   = ctk.StringVar(value="Natural Female")
+        self._speed_var   = ctk.StringVar(value="1.00×")
         self._emotion_var = ctk.StringVar(value="Neutral")
 
         self._build()
@@ -128,18 +132,41 @@ class MainView(ctk.CTkFrame):
     # ── Build ──────────────────────────────────────────────────────────────────
 
     def _build(self):
-        # Outer frame fills the available space; content column is centered inside
+        # Outer frame fills all available space
         self.columnconfigure(0, weight=1)
         self.rowconfigure(0, weight=1)
 
-        # Content column frame — width managed by _on_resize
-        self._col = ctk.CTkFrame(self, fg_color=BG_DEEP, corner_radius=0)
-        self._col.grid(row=0, column=0)
+        # Scrollable outer area to handle small windows
+        self._outer = ctk.CTkScrollableFrame(
+            self,
+            fg_color=BG_DEEP,
+            corner_radius=0,
+            scrollbar_button_color=BORDER,
+            scrollbar_button_hover_color=BORDER2,
+        )
+        self._outer.grid(row=0, column=0, sticky="nsew")
+        self._outer.columnconfigure(0, weight=1)
+
+        # Left spacer | _col | right spacer  — use grid so spacers absorb extra width
+        self._outer.columnconfigure(0, weight=1)   # left spacer
+        self._outer.columnconfigure(1, weight=0)   # content column (fixed max width)
+        self._outer.columnconfigure(2, weight=1)   # right spacer
+
+        # Content column placed in center grid cell
+        self._col = ctk.CTkFrame(self._outer, fg_color=BG_DEEP, corner_radius=0)
+        self._col.grid(row=0, column=1, sticky="nsew", padx=0, pady=40)
+        # _col fills its children horizontally
+        self._col.columnconfigure(0, weight=1)
+
+        # Left / right invisible spacer cells (needed for centering)
+        ctk.CTkFrame(self._outer, fg_color="transparent", width=0).grid(row=0, column=0)
+        ctk.CTkFrame(self._outer, fg_color="transparent", width=0).grid(row=0, column=2)
 
         self._build_upload_strip()
         self._build_textarea()
         self._build_dropdown_row()
         self._build_generate_btn()
+        self._build_progress_area()
         self._build_output_card()
 
     def _build_upload_strip(self):
@@ -239,7 +266,7 @@ class MainView(ctk.CTkFrame):
 
         self._textarea = ctk.CTkTextbox(
             ta_container,
-            height=180,
+            height=200,
             font=(FONTS["md"][0], 14),
             wrap="word",
             fg_color="transparent",
@@ -253,7 +280,7 @@ class MainView(ctk.CTkFrame):
         self._textarea.insert("0.0", "Type or paste your script here…")
 
         try:
-            self._textarea._textbox.configure(insertbackground=ACCENT)
+            self._textarea._textbox.configure(insertbackground=TEXT)
         except Exception:
             pass
 
@@ -323,7 +350,7 @@ class MainView(ctk.CTkFrame):
             button_hover_color=SURFACE2,
             text_color=TEXT,
             dropdown_fg_color=SURFACE2,
-            dropdown_hover_color="#1A1630",
+            dropdown_hover_color="#2A2A2A",
             dropdown_text_color=TEXT,
             corner_radius=40,
             height=42,
@@ -370,7 +397,6 @@ class MainView(ctk.CTkFrame):
         self._emotion_menu.grid(row=0, column=2, sticky="ew")
 
     def _on_voice_select(self, display_val: str):
-        # Strip the emoji prefix
         raw = display_val.replace("🎙 ", "").strip()
         self._voice_var.set(raw)
 
@@ -388,13 +414,41 @@ class MainView(ctk.CTkFrame):
             text="✦  Generate",
             height=52,
             corner_radius=14,
-            fg_color=ACCENT,
-            hover_color=ACCENT_HOV,
-            text_color="#FFFFFF",
+            fg_color="#FFFFFF",
+            hover_color="#E5E5E5",
+            text_color="#000000",
             font=(FONTS["generate"][0], 15, "bold"),
             command=self._on_generate_click,
         )
         self._gen_btn.pack(fill="x", padx=0, pady=(0, 10))
+
+    def _build_progress_area(self):
+        """Generation progress bar + chunk label — hidden until generating."""
+        self._progress_frame = ctk.CTkFrame(
+            self._col,
+            fg_color=SURFACE3,
+            corner_radius=10,
+        )
+        # Not packed — revealed by set_generating(True)
+
+        self._progress_bar = ctk.CTkProgressBar(
+            self._progress_frame,
+            height=6,
+            fg_color=BORDER2,
+            progress_color="#FFFFFF",
+            corner_radius=3,
+        )
+        self._progress_bar.set(0)
+        self._progress_bar.pack(fill="x", padx=PAD["md"], pady=(PAD["sm"], 4))
+
+        self._progress_label = ctk.CTkLabel(
+            self._progress_frame,
+            text="Starting…",
+            font=(FONTS["mono_xs"][0], 11),
+            text_color=TEXT_SUB,
+            anchor="center",
+        )
+        self._progress_label.pack(pady=(0, PAD["sm"]))
 
     def _on_generate_click(self):
         if self.on_generate:
@@ -408,39 +462,73 @@ class MainView(ctk.CTkFrame):
             corner_radius=14,
             border_color=BORDER2,
             border_width=1,
-            height=90,
         )
         # Not packed yet — shown via show_output()
 
-        # ── Play button (left) ──
+        # ── Inner layout: three zones packed horizontally ──
+        inner = ctk.CTkFrame(self._output_card, fg_color="transparent")
+        inner.pack(fill="both", expand=True, padx=10, pady=10)
+
+        # Left: play button
+        left_zone = ctk.CTkFrame(inner, fg_color="transparent")
+        left_zone.pack(side="left", padx=(0, 10))
+
         self._play_btn = ctk.CTkButton(
-            self._output_card,
+            left_zone,
             text="▶",
             width=40, height=40,
-            fg_color=ACCENT,
-            hover_color=ACCENT_HOV,
-            text_color="#FFFFFF",
+            fg_color="#FFFFFF",
+            hover_color="#E5E5E5",
+            text_color="#000000",
             corner_radius=20,
             font=(FONTS["base"][0], 16),
             command=self._toggle_play,
         )
-        self._play_btn.place(x=12, rely=0.5, anchor="w")
+        self._play_btn.pack()
 
-        # ── Center: progress bar + labels ──
-        center = ctk.CTkFrame(self._output_card, fg_color="transparent")
-        center.place(x=64, rely=0.5, anchor="w", relwidth=0.72)
+        # Right: action icon buttons
+        right_zone = ctk.CTkFrame(inner, fg_color="transparent")
+        right_zone.pack(side="right", padx=(10, 0))
+
+        icon_kw = dict(
+            width=32, height=32,
+            fg_color="transparent",
+            hover_color=BORDER2,
+            text_color=TEXT_DIM,
+            corner_radius=8,
+            font=(FONTS["base"][0], 13),
+        )
+
+        ctk.CTkButton(
+            right_zone, text="↓", **icon_kw,
+            command=self._do_download,
+        ).pack(side="left", padx=(0, 2))
+
+        ctk.CTkButton(
+            right_zone, text="📂", **icon_kw,
+            command=self._do_open_folder,
+        ).pack(side="left", padx=(0, 2))
+
+        ctk.CTkButton(
+            right_zone, text="■", **icon_kw,
+            command=self._stop_playback,
+        ).pack(side="left")
+
+        # Center: progress bar + labels
+        center_zone = ctk.CTkFrame(inner, fg_color="transparent")
+        center_zone.pack(side="left", fill="both", expand=True)
 
         self._player_bar = ctk.CTkProgressBar(
-            center,
+            center_zone,
             height=5,
             fg_color=BORDER2,
-            progress_color=ACCENT,
+            progress_color="#FFFFFF",
             corner_radius=3,
         )
         self._player_bar.set(0)
-        self._player_bar.pack(fill="x", pady=(0, 3))
+        self._player_bar.pack(fill="x", pady=(0, 4))
 
-        info_row = ctk.CTkFrame(center, fg_color="transparent")
+        info_row = ctk.CTkFrame(center_zone, fg_color="transparent")
         info_row.pack(fill="x")
 
         self._output_filename_label = ctk.CTkLabel(
@@ -456,39 +544,11 @@ class MainView(ctk.CTkFrame):
             info_row,
             text="",
             font=FONTS["xs_bold"],
-            text_color=ACCENT,
-            fg_color=ACCENT_DIM,
+            text_color=TEXT_SUB,
+            fg_color=BORDER2,
             corner_radius=RADIUS["full"],
         )
         self._duration_badge.pack(side="right")
-
-        # ── Right: action icon buttons ──
-        right_btns = ctk.CTkFrame(self._output_card, fg_color="transparent")
-        right_btns.place(relx=0.98, rely=0.5, anchor="e")
-
-        icon_kw = dict(
-            width=32, height=32,
-            fg_color="transparent",
-            hover_color=BORDER2,
-            text_color=TEXT_DIM,
-            corner_radius=8,
-            font=(FONTS["base"][0], 13),
-        )
-
-        ctk.CTkButton(
-            right_btns, text="↓", **icon_kw,
-            command=self._do_download,
-        ).pack(side="left", padx=(0, 2))
-
-        ctk.CTkButton(
-            right_btns, text="📂", **icon_kw,
-            command=self._do_open_folder,
-        ).pack(side="left", padx=(0, 2))
-
-        ctk.CTkButton(
-            right_btns, text="■", **icon_kw,
-            command=self._stop_playback,
-        ).pack(side="left")
 
     # ── Resize handler ─────────────────────────────────────────────────────────
 
@@ -657,19 +717,53 @@ class MainView(ctk.CTkFrame):
             "clone_ref_path": self._clone_ref_path,
         }
 
-    def set_generating(self, is_generating: bool):
+    def set_generating(
+        self,
+        is_generating: bool,
+        chunk: int = 0,
+        total: int = 0,
+        eta: float = 0.0,
+    ):
         if is_generating:
             self._gen_btn.configure(
                 text="  Generating…  ",
                 state="disabled",
                 fg_color=ACCENT_DIM,
+                text_color=TEXT_SUB,
             )
+            self._gen_total = max(total, 1)
+            self._progress_bar.set(0)
+            self._progress_label.configure(text="Starting…")
+            if not self._progress_frame.winfo_ismapped():
+                self._progress_frame.pack(fill="x", padx=0, pady=(0, 10))
         else:
             self._gen_btn.configure(
                 text="✦  Generate",
                 state="normal",
-                fg_color=ACCENT,
+                fg_color="#FFFFFF",
+                text_color="#000000",
             )
+            if self._progress_frame.winfo_ismapped():
+                self._progress_frame.pack_forget()
+
+    def update_chunk_progress(self, c: int, total: int, eta: float):
+        """Update the progress bar and chunk label during generation."""
+        if total <= 0:
+            return
+        self._gen_total = total
+        frac = c / total
+        self._progress_bar.set(frac)
+        pct = int(frac * 100)
+        if eta > 0:
+            eta_sec = int(eta)
+            eta_str = f"{eta_sec}s"
+        else:
+            eta_str = "…"
+        self._progress_label.configure(
+            text=f"Chunk {c} of {total}  •  {pct}%  •  ETA: {eta_str}"
+        )
+        if not self._progress_frame.winfo_ismapped():
+            self._progress_frame.pack(fill="x", padx=0, pady=(0, 10))
 
     def show_output(self, path: Path, duration_str: str):
         """Reveal the output card after a successful generation."""
@@ -710,6 +804,9 @@ class MainView(ctk.CTkFrame):
     def set_output_dir(self, path: str):
         self._output_dir = path
 
+    def get_output_dir(self) -> str:
+        return self._output_dir
+
     def set_output_format(self, fmt: str):
         self._output_format = fmt.upper()
 
@@ -733,3 +830,10 @@ class MainView(ctk.CTkFrame):
             self._textarea.delete("0.0", "end")
         self._textarea.insert("0.0", text)
         self._update_char_count()
+
+    def clear_script(self):
+        """Clear the textarea and restore the placeholder."""
+        self._textarea.delete("0.0", "end")
+        self._placeholder_active = False
+        # Trigger focus-out logic to restore placeholder
+        self._on_textarea_focus_out()

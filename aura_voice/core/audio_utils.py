@@ -49,16 +49,9 @@ def stitch_chunks(
     progress_callback: Optional[Callable[[int, int], None]] = None,
 ) -> "AudioSegment":
     """
-    Concatenate a list of WAV chunk files into a single AudioSegment,
-    inserting a silence gap between each chunk.
-
-    Args:
-        chunk_paths:       Ordered list of chunk WAV file paths.
-        silence_ms:        Milliseconds of silence between chunks.
-        progress_callback: Optional callback(current_index, total) called per chunk.
-
-    Returns:
-        A single concatenated AudioSegment.
+    Concatenate WAV chunks into a single AudioSegment (pydub path).
+    Kept for callers that need an AudioSegment object.
+    For large jobs, prefer stitch_chunks_to_file() which is much lighter.
     """
     if not chunk_paths:
         raise ValueError("No audio chunks provided for stitching.")
@@ -78,6 +71,56 @@ def stitch_chunks(
             progress_callback(idx + 1, total)
 
     return combined  # type: ignore[return-value]
+
+
+def stitch_chunks_to_file(
+    chunk_paths: List[Path],
+    output_path: Path,
+    silence_ms: int = SILENCE_BETWEEN_CHUNKS_MS,
+    progress_callback: Optional[Callable[[int, int], None]] = None,
+) -> None:
+    """
+    Concatenate WAV chunks directly into a WAV file using the built-in
+    ``wave`` module — no pydub decoding, no large AudioSegment in memory.
+
+    This is significantly lighter on CPU and RAM than the pydub approach
+    because it copies raw PCM bytes without decoding/re-encoding.
+    All chunks must share the same sample-rate, bit-depth, and channel count
+    (guaranteed when they come from the same TTS model).
+
+    Args:
+        chunk_paths:       Ordered list of WAV chunk file paths.
+        output_path:       Destination WAV path (created/overwritten).
+        silence_ms:        Milliseconds of silence inserted between chunks.
+        progress_callback: Optional callback(current_index, total).
+    """
+    import wave as _wave
+
+    if not chunk_paths:
+        raise ValueError("No audio chunks provided for stitching.")
+
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    total  = len(chunk_paths)
+    params = None   # wave.params namedtuple (set from first chunk)
+
+    with _wave.open(str(output_path), "wb") as out_wav:
+        for idx, path in enumerate(chunk_paths):
+            with _wave.open(str(path), "rb") as in_wav:
+                if params is None:
+                    params = in_wav.getparams()
+                    out_wav.setparams(params)
+                out_wav.writeframes(in_wav.readframes(in_wav.getnframes()))
+
+            # Silence gap between chunks (not after the last one)
+            if idx < total - 1 and silence_ms > 0 and params is not None:
+                n_silence = int(params.framerate * silence_ms / 1000)
+                silence_bytes = b"\x00" * (n_silence * params.nchannels * params.sampwidth)
+                out_wav.writeframes(silence_bytes)
+
+            if progress_callback:
+                progress_callback(idx + 1, total)
 
 
 def export_wav(audio: "AudioSegment", output_path: Path) -> None:

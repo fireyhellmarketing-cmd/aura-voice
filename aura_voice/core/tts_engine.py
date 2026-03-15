@@ -300,13 +300,14 @@ class TTSEngine:
         on_complete:       Optional[Callable[[Path], None]]           = None,
         on_error:          Optional[Callable[[str], None]]            = None,
     ) -> Optional[Path]:
-        from core.audio_utils import stitch_chunks, export_wav, export_mp3, cleanup_temp_directory
+        from core.audio_utils import (
+            stitch_chunks_to_file, export_mp3, cleanup_temp_directory
+        )
 
         # Determine if we're cloning
         use_clone = voice_profile == "Custom (Clone)" and reference_wav is not None
 
         if use_clone:
-            # Load XTTS v2 lazily (blocks until ready — runs in background thread)
             try:
                 self._load_xtts_if_needed()
             except Exception as exc:
@@ -317,7 +318,7 @@ class TTSEngine:
             speaker_id = VOICE_PROFILES.get(voice_profile, "p225")
 
         # Apply delivery-style speed multiplier on top of user speed
-        emotion_mult   = EMOTION_SPEEDS.get(emotion, 1.0)
+        emotion_mult    = EMOTION_SPEEDS.get(emotion, 1.0)
         effective_speed = round(speed * emotion_mult, 3)
 
         chunks = chunk_text(text)
@@ -328,11 +329,22 @@ class TTSEngine:
                 on_error("No text to synthesise.")
             return None
 
-        owns_temp = temp_dir is None
-        if owns_temp:
-            temp_dir = Path(tempfile.mkdtemp(prefix="aura_voice_"))
+        # ── Persistent chunk folder ──────────────────────────────────────────
+        # Chunks are saved next to the output file (not in a system temp dir).
+        # If the app crashes mid-synthesis the folder survives so the user can
+        # manually stitch the completed chunks later.
+        #   e.g.  ~/Documents/AuraVoice/aura_voice_20260316_012345_chunks/
+        owns_chunk_dir = temp_dir is None
+        if owns_chunk_dir:
+            output_path = Path(output_path)
+            chunk_dir   = output_path.parent / (output_path.name + "_chunks")
+            chunk_dir.mkdir(parents=True, exist_ok=True)
+            temp_dir    = chunk_dir
+        else:
+            chunk_dir   = Path(temp_dir)
 
         chunk_paths: List[Path] = []
+        succeeded = False
         try:
             chunk_times: List[float] = []
             for idx, chunk in enumerate(chunks):
@@ -361,8 +373,8 @@ class TTSEngine:
                 chunk_times.append(elapsed)
                 chunk_paths.append(chunk_path)
 
-                avg  = sum(chunk_times) / len(chunk_times)
-                eta  = avg * (total - (idx + 1))
+                avg = sum(chunk_times) / len(chunk_times)
+                eta = avg * (total - (idx + 1))
                 if on_chunk_done:
                     on_chunk_done(idx + 1, total, eta)
 
@@ -371,31 +383,52 @@ class TTSEngine:
 
             if on_stitch_start:
                 on_stitch_start()
-            combined = stitch_chunks(chunk_paths, progress_callback=on_stitch_progress)
 
-            if cancel_event and cancel_event.is_set():
-                return None
-
+            # ── Light stitching via wave module (no pydub decoding) ──────────
+            output_path = Path(output_path)
             output_path.parent.mkdir(parents=True, exist_ok=True)
+
             if output_format.lower() == "mp3":
+                # Stitch to a temporary WAV first, then convert
+                wav_tmp = output_path.with_suffix(".wav")
+                stitch_chunks_to_file(
+                    chunk_paths, wav_tmp,
+                    progress_callback=on_stitch_progress,
+                )
+                if cancel_event and cancel_event.is_set():
+                    return None
                 final_path = output_path.with_suffix(".mp3")
                 if on_export_start:
                     on_export_start("mp3")
-                export_mp3(combined, final_path)
+                try:
+                    from pydub import AudioSegment as _AS
+                    export_mp3(_AS.from_wav(str(wav_tmp)), final_path)
+                finally:
+                    if wav_tmp.exists():
+                        wav_tmp.unlink(missing_ok=True)
             else:
                 final_path = output_path.with_suffix(".wav")
                 if on_export_start:
                     on_export_start("wav")
-                export_wav(combined, final_path)
+                stitch_chunks_to_file(
+                    chunk_paths, final_path,
+                    progress_callback=on_stitch_progress,
+                )
 
+            succeeded = True
             if on_complete:
                 on_complete(final_path)
             return final_path
 
         except Exception as exc:
             if on_error:
-                on_error(str(exc))
+                on_error(
+                    f"{exc}\n\n"
+                    f"Chunks saved at:\n{chunk_dir}\n"
+                    "(You can stitch them manually using ffmpeg or Audacity.)"
+                )
             return None
         finally:
-            if owns_temp:
+            # Clean up chunk folder only on success; keep it on failure/cancel
+            if owns_chunk_dir and succeeded:
                 cleanup_temp_directory(temp_dir)
