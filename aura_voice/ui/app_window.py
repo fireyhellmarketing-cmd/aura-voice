@@ -755,12 +755,20 @@ class AuraVoiceApp(ctk.CTk):
         if is_model_downloaded(spec.get("model_id", "")):
             self._load_model_bg(model_name)
         else:
-            if messagebox.askyesno(
-                "Model Not Downloaded",
-                f"The model '{model_name}' is not downloaded.\n\n"
-                f"Download it now? (~{spec.get('size_gb', 0)} GB)\n\n"
-                "You can also change the model in Settings.",
-            ):
+            pip_pkgs = spec.get("pip_install")
+            if pip_pkgs:
+                msg = (
+                    f"'{model_name}' requires Python packages:\n\n"
+                    f"  pip install {pip_pkgs}\n\n"
+                    "Install now? (requires internet connection)"
+                )
+            else:
+                msg = (
+                    f"The model '{model_name}' is not downloaded.\n\n"
+                    f"Download it now? (~{spec.get('size_gb', 0)} GB)\n\n"
+                    "You can also change the model in Settings."
+                )
+            if messagebox.askyesno("Model Not Installed", msg):
                 self._download_model_bg(model_name, spec)
             else:
                 self._model_pill.configure(
@@ -776,6 +784,7 @@ class AuraVoiceApp(ctk.CTk):
         def _load():
             try:
                 self._engine.load_model(
+                    model_name=model_name,
                     progress_callback=lambda m: self._q.put((_Q_MODEL_STATUS, m))
                 )
                 self._q.put((_Q_MODEL_STATUS, "__done__"))
@@ -785,15 +794,38 @@ class AuraVoiceApp(ctk.CTk):
         threading.Thread(target=_load, daemon=True).start()
 
     def _download_model_bg(self, model_name: str, spec: Optional[dict] = None):
-        size_gb = (spec or {}).get("size_gb", 0)
-        self._model_pill.configure(text="  Downloading...  ", text_color=WARNING)
-        self._terminal.write(
-            f"[System] Downloading {model_name} (~{size_gb} GB)...\n", "blue"
-        )
+        spec     = spec or {}
+        size_gb  = spec.get("size_gb", 0)
+        pip_pkgs = spec.get("pip_install")
+
+        if pip_pkgs:
+            self._model_pill.configure(text="  Installing…  ", text_color=WARNING)
+            self._terminal.write(
+                f"[System] Installing {model_name}  (pip install {pip_pkgs})…\n", "blue"
+            )
+        else:
+            self._model_pill.configure(text="  Downloading…  ", text_color=WARNING)
+            self._terminal.write(
+                f"[System] Downloading {model_name} (~{size_gb} GB)…\n", "blue"
+            )
 
         def _dl():
+            # Run pip install if the engine uses a Python package
+            if pip_pkgs:
+                import subprocess
+                print(f"[Install] pip install {pip_pkgs}")
+                result = subprocess.run(
+                    [sys.executable, "-m", "pip", "install"] + pip_pkgs.split(),
+                    capture_output=True, text=True,
+                )
+                if result.returncode != 0:
+                    self._q.put((_Q_MODEL_STATUS,
+                        f"__error__pip install {pip_pkgs} failed:\n{result.stderr[:300]}"))
+                    return
+                print(f"[Install] {pip_pkgs} installed successfully")
             try:
                 self._engine.load_model(
+                    model_name=model_name,
                     progress_callback=lambda m: self._q.put((_Q_MODEL_STATUS, m))
                 )
                 self._q.put((_Q_MODEL_STATUS, "__done__"))
@@ -891,6 +923,7 @@ class AuraVoiceApp(ctk.CTk):
                 voice_profile=settings["voice_profile"],
                 emotion=settings["delivery_style"],
                 speed=settings["speed"],
+                exaggeration=settings.get("exaggeration", 0.5),
                 language=lang_code,
                 output_format=settings["output_format"].lower(),
                 reference_wav=ref_wav,
@@ -930,14 +963,17 @@ class AuraVoiceApp(ctk.CTk):
     def _handle(self, kind: str, payload):
         if kind == _Q_MODEL_STATUS:
             if payload == "__done__":
-                name  = self._config.get("selected_model", "VCTK VITS")
-                short = name.split("--")[0].strip()
+                name  = self._config.get("selected_model", "Kokoro")
+                short = name.split("—")[0].strip()
                 self._model_pill.configure(
                     text=f"  ● {short}  ",
                     text_color=SUCCESS,
                     fg_color=SUCCESS_BG,
                 )
                 self._terminal.write(f"[Model] Ready: {name}\n", "green")
+                # Update voice panel voice list for the loaded engine
+                engine_type = self._engine.engine_type
+                self._voice_panel.set_voice_engine(engine_type)
             elif payload.startswith("__error__"):
                 err = payload.replace("__error__", "")
                 self._model_pill.configure(

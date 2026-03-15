@@ -15,15 +15,16 @@ from assets.styles import (
     ACCENT, ACCENT_HOV,
     FONTS, PAD, RADIUS,
 )
-from core.tts_engine import VOICE_PROFILES, EMOTION_SPEEDS, LANGUAGE_CODES
+from core.tts_engine import VOICE_PROFILES, KOKORO_VOICES, EMOTION_SPEEDS, LANGUAGE_CODES
 from pathlib import Path as _Path
 from core.tts_engine import TTSEngine as _TTSEngine
 
-_PROFILES_DIR = _Path.home() / "Documents" / "AuraVoice" / "profiles"
+_PROFILES_DIR  = _Path.home() / "Documents" / "AuraVoice" / "profiles"
 _SAVED_PREFIX  = "👤 "   # prefix for saved voice profiles in the dropdown
 
-DELIVERY_STYLES = list(EMOTION_SPEEDS.keys())
-VOICE_NAMES     = list(VOICE_PROFILES.keys())
+DELIVERY_STYLES  = list(EMOTION_SPEEDS.keys())
+VOICE_NAMES      = list(VOICE_PROFILES.keys())
+KOKORO_NAMES     = list(KOKORO_VOICES.keys())
 
 # Emotion dot positions on the 2D grid (label, x 0-1, y 0-1, color)
 _EMOTION_DOTS = [
@@ -122,7 +123,8 @@ class VoicePanel(ctk.CTkFrame):
         self.configure(width=280)
         self.pack_propagate(False)
 
-        self._voice_var       = ctk.StringVar(value="Natural Female")
+        self._engine_type     = "kokoro"   # updated by app_window on model load
+        self._voice_var       = ctk.StringVar(value="Warm Female (US)")
         self._speed_var       = ctk.DoubleVar(value=1.0)
         self._stability_var   = ctk.DoubleVar(value=0.75)
         self._exaggeration_var= ctk.DoubleVar(value=0.50)
@@ -332,7 +334,8 @@ class VoicePanel(ctk.CTkFrame):
         return ("..." + path[-(maxlen - 1):]) if len(path) > maxlen else path
 
     def _on_voice_change(self, val: str):
-        if val == "Custom (Clone)":
+        # Show clone ref card when Custom Clone selected OR a saved profile is active
+        if val == "Custom (Clone)" or val.startswith(_SAVED_PREFIX):
             self._clone_frame.pack(fill="x", padx=PAD["xl"], pady=(0, PAD["md"]))
         else:
             self._clone_frame.pack_forget()
@@ -374,12 +377,14 @@ class VoicePanel(ctk.CTkFrame):
             self._folder_label.configure(text=self._shorten(d))
 
     def _build_voice_list(self) -> list:
-        """Build the full voice dropdown list: standard + saved profiles."""
-        names = list(VOICE_NAMES)
-        if self._saved_profiles:
-            for name in self._saved_profiles:
-                names.append(_SAVED_PREFIX + name)
-        return names
+        """Build voice dropdown: Kokoro voices (or VCTK) + saved profiles."""
+        if self._engine_type in ("kokoro", "chatterbox"):
+            base = list(KOKORO_NAMES)
+        else:
+            base = list(VOICE_NAMES)
+        for name in self._saved_profiles:
+            base.append(_SAVED_PREFIX + name)
+        return base
 
     def _on_save_profile_click(self):
         """Open a name-entry dialog and trigger save."""
@@ -429,21 +434,39 @@ class VoicePanel(ctk.CTkFrame):
         if hasattr(self, "_voice_menu"):
             self._voice_menu.configure(values=self._build_voice_list())
 
+    def set_voice_engine(self, engine_type: str):
+        """
+        Called by app_window after a model loads.
+        engine_type: "kokoro" | "chatterbox" | "vctk" | "xtts"
+        Updates the voice dropdown to show the correct voice list.
+        """
+        self._engine_type = engine_type
+        if not hasattr(self, "_voice_menu"):
+            return
+        new_list = self._build_voice_list()
+        self._voice_menu.configure(values=new_list)
+        # Reset to the first voice if current value is no longer in list
+        current = self._voice_var.get()
+        if current not in new_list:
+            self._voice_var.set(new_list[0] if new_list else "")
+            self._on_voice_change(self._voice_var.get())
+
     # ── Public API ─────────────────────────────────────────────────────────────
 
     def get_settings(self) -> dict:
         val = self._voice_var.get()
         profile_npz = self._get_profile_npz()
-        # For saved profiles, report voice_profile as "Custom (Clone)" so engine uses XTTS
+        # Saved profiles always use cloning engine
         voice_profile = "Custom (Clone)" if profile_npz else val
         return {
-            "voice_profile":   voice_profile,
-            "delivery_style":  self._emotion_var.get(),
-            "language":        "English",
-            "speed":           round(self._speed_var.get(), 2),
-            "output_format":   self._format_var.get(),
-            "output_dir":      self._output_dir,
-            "clone_ref_path":  self._clone_ref,
+            "voice_profile":    voice_profile,
+            "delivery_style":   self._emotion_var.get(),
+            "language":         "English",
+            "speed":            round(self._speed_var.get(), 2),
+            "exaggeration":     round(self._exaggeration_var.get(), 2),
+            "output_format":    self._format_var.get(),
+            "output_dir":       self._output_dir,
+            "clone_ref_path":   self._clone_ref,
             "profile_npz_path": profile_npz,
         }
 

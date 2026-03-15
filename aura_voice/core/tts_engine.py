@@ -1,10 +1,11 @@
 """
-AURA VOICE — TTS engine: Coqui VITS (VCTK) wrapper, text chunking, and synthesis pipeline.
+AURA VOICE — TTS engine.
 
-Primary model : tts_models/en/vctk/vits
- - 109 English speakers, fast VITS architecture
- - Real-time factor ~0.13 (very fast, even on CPU)
- - Requires espeak-ng:  brew install espeak-ng  (macOS)
+Supported engines:
+  • Kokoro TTS  (default) — 82M params, human-quality US/UK English voices, very fast on CPU
+  • Chatterbox  (cloning) — Resemble AI open-source ElevenLabs alternative, emotion control
+  • XTTS v2     (legacy)  — multilingual voice cloning fallback
+  • VCTK VITS   (legacy)  — fast 109-speaker English fallback
 """
 
 from __future__ import annotations
@@ -23,44 +24,71 @@ from typing import Callable, Dict, List, Optional
 MODEL_NAME       = "tts_models/en/vctk/vits"
 XTTS_MODEL_NAME  = "tts_models/multilingual/multi-dataset/xtts_v2"
 
-CHUNK_TARGET_WORDS = 100   # VITS handles shorter chunks best
-CHUNK_MAX_WORDS    = 150
+CHUNK_TARGET_WORDS = 80    # shorter chunks → more natural prosody
+CHUNK_MAX_WORDS    = 120
 
-# Friendly voice profile name → VCTK speaker ID
-# Names must exactly match controls_panel.py VOICE_PROFILES list.
-VOICE_PROFILES: Dict[str, str] = {
-    "Natural Female":            "p225",   # clear, neutral British female
-    "Natural Male":              "p226",   # clear, neutral British male
-    "Warm Female":               "p270",   # warm, expressive female
-    "Deep Male":                 "p260",   # deep male voice
-    "Youthful Female":           "p330",   # young, bright female
-    "Authoritative Male":        "p247",   # authoritative male
-    "Calm Female — British":     "p236",   # calm, clear British female
-    "Energetic Male — American": "p374",   # energetic male
-    "Soft Whispery Female":      "p228",   # soft, gentle female
-    "Professional Narrator":     "p245",   # clear narrator male
-    "Custom (Clone)":            "p225",   # fallback — VCTK doesn't support cloning
+# ── Kokoro voices ─────────────────────────────────────────────────────────────
+# pip install kokoro soundfile
+KOKORO_VOICES: Dict[str, str] = {
+    "Warm Female (US)":          "af_heart",     # warm, expressive — best overall
+    "Bright Female (US)":        "af_nova",       # bright, energetic
+    "Professional Female (US)":  "af_alloy",      # neutral, clear
+    "Soft Female (US)":          "af_shimmer",    # gentle, soothing
+    "Clear Male (US)":           "am_echo",       # clear, articulate
+    "Deep Male (US)":            "am_onyx",       # deep, authoritative
+    "Natural Female (UK)":       "bf_emma",       # natural British female
+    "Expressive Female (UK)":    "bf_isabella",   # expressive British female
+    "Natural Male (UK)":         "bm_george",     # natural British male
+    "Warm Male (UK)":            "bm_lewis",      # warm British male
+    "Custom (Clone)":            "af_heart",      # placeholder — routes to Chatterbox
 }
 
-# Kept for UI compatibility — VITS doesn't use emotion conditioning
+# ── VCTK VITS voices (legacy fallback) ───────────────────────────────────────
+VOICE_PROFILES: Dict[str, str] = {
+    "Natural Female":            "p225",
+    "Natural Male":              "p226",
+    "Warm Female":               "p270",
+    "Deep Male":                 "p260",
+    "Youthful Female":           "p330",
+    "Authoritative Male":        "p247",
+    "Calm Female — British":     "p236",
+    "Energetic Male — American": "p374",
+    "Soft Whispery Female":      "p228",
+    "Professional Narrator":     "p245",
+    "Custom (Clone)":            "p225",
+}
+
+# Kept for UI compatibility
 EMOTION_PREFIXES: Dict[str, str] = {k: "" for k in [
     "Neutral", "Happy & Upbeat", "Serious & Authoritative",
     "Sad & Reflective", "Excited & Enthusiastic", "Calm & Meditative",
 ]}
 
-# Delivery style → speed multiplier applied on top of user speed setting
+# Delivery style → speed multiplier
 EMOTION_SPEEDS: Dict[str, float] = {
     "Neutral":                  1.00,
     "Happy & Upbeat":           1.10,
     "Serious & Authoritative":  0.93,
-    "Sad & Reflective":         0.82,
-    "Excited & Enthusiastic":   1.20,
-    "Calm & Meditative":        0.80,
+    "Sad & Reflective":         0.88,
+    "Excited & Enthusiastic":   1.15,
+    "Calm & Meditative":        0.85,
     "Warm & Friendly":          1.02,
     "Professional":             0.95,
 }
 
-# Language codes (kept for UI; VITS model is English-only)
+# Delivery style → Chatterbox exaggeration override (None = use slider value)
+EMOTION_EXAGGERATION: Dict[str, Optional[float]] = {
+    "Neutral":                  0.50,
+    "Happy & Upbeat":           0.70,
+    "Serious & Authoritative":  0.40,
+    "Sad & Reflective":         0.35,
+    "Excited & Enthusiastic":   0.85,
+    "Calm & Meditative":        0.25,
+    "Warm & Friendly":          0.60,
+    "Professional":             0.45,
+}
+
+# Language codes
 LANGUAGE_CODES: Dict[str, str] = {
     "English":    "en",
     "Spanish":    "es",
@@ -71,6 +99,17 @@ LANGUAGE_CODES: Dict[str, str] = {
     "Italian":    "it",
     "Dutch":      "nl",
 }
+
+
+def _get_torch_device() -> str:
+    """Return 'mps' on Apple Silicon, else 'cpu'."""
+    try:
+        import torch
+        if torch.backends.mps.is_available():
+            return "mps"
+    except Exception:
+        pass
+    return "cpu"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -126,23 +165,38 @@ def chunk_text(text: str, target_words: int = CHUNK_TARGET_WORDS) -> List[str]:
 
 class TTSEngine:
     """
-    Wrapper around Coqui TTS / VCTK VITS.
+    Multi-engine TTS wrapper.
 
-    Lifecycle
-    ---------
-    1. is_model_cached() — check if already downloaded
-    2. load_model()      — blocking; run in a thread
-    3. synthesise()      — full pipeline
+    Engines:
+      kokoro     — primary (human-quality, fast CPU)
+      chatterbox — voice cloning (ElevenLabs-grade quality)
+      vctk       — legacy VCTK VITS fallback
+      xtts       — legacy XTTS v2 cloning fallback
     """
 
     def __init__(self) -> None:
-        self._tts          = None
+        # Engine type currently loaded for standard synthesis
+        self._engine_type  = "vctk"    # "kokoro" | "chatterbox" | "vctk"
         self._model_loaded = False
         self._lock         = threading.Lock()
-        # XTTS v2 — lazily loaded only when voice cloning is requested
-        self._xtts_tts     = None
-        self._xtts_loaded  = False
-        self._xtts_lock    = threading.Lock()
+
+        # VCTK VITS (legacy)
+        self._tts      = None
+
+        # Kokoro TTS
+        self._kokoro_pipeline = None
+        self._kokoro_loaded   = False
+        self._kokoro_lock     = threading.Lock()
+
+        # Chatterbox TTS (voice cloning + standard)
+        self._chatterbox_model  = None
+        self._chatterbox_loaded = False
+        self._chatterbox_lock   = threading.Lock()
+
+        # XTTS v2 (legacy cloning fallback)
+        self._xtts_tts    = None
+        self._xtts_loaded = False
+        self._xtts_lock   = threading.Lock()
 
     # ── Model helpers ────────────────────────────────────────────────────────
 
@@ -167,35 +221,100 @@ class TTSEngine:
 
     def load_model(
         self,
+        model_name: str = "",
         progress_callback: Optional[Callable[[str], None]] = None,
     ) -> None:
         """Initialise the TTS model (blocking — run in a background thread)."""
+        name_lower = model_name.lower()
+        if "kokoro" in name_lower:
+            self._load_kokoro(progress_callback)
+        elif "chatterbox" in name_lower:
+            self._load_chatterbox_primary(progress_callback)
+        else:
+            self._load_vctk(progress_callback)
+
+    def _load_vctk(self, progress_callback=None):
+        """Load legacy VCTK VITS model."""
         try:
             import os
             os.environ.setdefault("COQUI_TOS_AGREED", "1")
             from TTS.api import TTS
-
             if progress_callback:
                 progress_callback("Loading VITS model…")
-
             tts_instance = TTS(MODEL_NAME, gpu=False)
-
             with self._lock:
                 self._tts          = tts_instance
+                self._engine_type  = "vctk"
                 self._model_loaded = True
-
             if progress_callback:
-                progress_callback("Model loaded successfully.")
-
+                progress_callback("VCTK VITS loaded.")
         except Exception as exc:
             with self._lock:
                 self._model_loaded = False
-            raise RuntimeError(f"Failed to load TTS model: {exc}") from exc
+            raise RuntimeError(f"Failed to load VCTK VITS: {exc}") from exc
+
+    def _load_kokoro(self, progress_callback=None):
+        """Load Kokoro TTS pipeline (pip install kokoro soundfile)."""
+        try:
+            if progress_callback:
+                progress_callback("Loading Kokoro TTS…")
+            from kokoro import KPipeline
+            # American English pipeline ('a'); British = 'b'
+            pipeline = KPipeline(lang_code="a")
+            with self._kokoro_lock:
+                self._kokoro_pipeline = pipeline
+                self._kokoro_loaded   = True
+            with self._lock:
+                self._engine_type  = "kokoro"
+                self._model_loaded = True
+            if progress_callback:
+                progress_callback("Kokoro TTS loaded — human-quality voices ready.")
+        except ImportError:
+            raise RuntimeError(
+                "Kokoro package not installed.\n"
+                "Run:  pip install kokoro soundfile"
+            )
+        except Exception as exc:
+            with self._lock:
+                self._model_loaded = False
+            raise RuntimeError(f"Failed to load Kokoro: {exc}") from exc
+
+    def _load_chatterbox_primary(self, progress_callback=None):
+        """Load Chatterbox as the primary engine (pip install chatterbox-tts)."""
+        try:
+            if progress_callback:
+                progress_callback("Loading Chatterbox TTS…")
+            from chatterbox.tts import ChatterboxTTS
+            device = _get_torch_device()
+            print(f"[Chatterbox] Loading on device: {device}")
+            model = ChatterboxTTS.from_pretrained(device=device)
+            with self._chatterbox_lock:
+                self._chatterbox_model  = model
+                self._chatterbox_loaded = True
+            with self._lock:
+                self._engine_type  = "chatterbox"
+                self._model_loaded = True
+            if progress_callback:
+                progress_callback("Chatterbox TTS loaded — voice cloning ready.")
+        except ImportError:
+            raise RuntimeError(
+                "Chatterbox package not installed.\n"
+                "Run:  pip install chatterbox-tts"
+            )
+        except Exception as exc:
+            with self._lock:
+                self._model_loaded = False
+            raise RuntimeError(f"Failed to load Chatterbox: {exc}") from exc
 
     @property
     def is_loaded(self) -> bool:
         with self._lock:
             return self._model_loaded
+
+    @property
+    def engine_type(self) -> str:
+        with self._lock:
+            return self._engine_type
 
     def get_available_speakers(self) -> List[str]:
         with self._lock:
@@ -205,6 +324,98 @@ class TTSEngine:
                 return self._tts.speakers or []
             except Exception:
                 return []
+
+    # ── Kokoro synthesis ─────────────────────────────────────────────────────
+
+    def _synthesise_chunk_kokoro(
+        self,
+        text: str,
+        output_path: Path,
+        voice: str = "af_heart",
+        speed: float = 1.0,
+    ) -> None:
+        """Synthesise one chunk with Kokoro TTS. Output: 24 kHz mono WAV."""
+        with self._kokoro_lock:
+            pipeline = self._kokoro_pipeline
+        if pipeline is None:
+            raise RuntimeError("Kokoro pipeline not loaded.")
+
+        import numpy as np
+        import soundfile as sf
+
+        audio_parts: List[np.ndarray] = []
+        # split_pattern=None lets Kokoro handle its own sentence splitting
+        for _gs, _ps, audio in pipeline(text, voice=voice, speed=speed, split_pattern=None):
+            if audio is not None and len(audio) > 0:
+                audio_parts.append(audio)
+
+        if not audio_parts:
+            raise RuntimeError("Kokoro produced no audio output.")
+
+        combined = np.concatenate(audio_parts).astype(np.float32)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        sf.write(str(output_path), combined, 24000)
+
+    # ── Chatterbox synthesis ─────────────────────────────────────────────────
+
+    def _load_chatterbox_if_needed(
+        self,
+        progress_callback: Optional[Callable[[str], None]] = None,
+    ) -> None:
+        """Lazily load Chatterbox for voice cloning."""
+        with self._chatterbox_lock:
+            if self._chatterbox_loaded:
+                return
+        if progress_callback:
+            progress_callback("Loading Chatterbox for voice cloning…")
+        try:
+            from chatterbox.tts import ChatterboxTTS
+            device = _get_torch_device()
+            print(f"[Chatterbox] Loading cloning engine on {device}…")
+            model = ChatterboxTTS.from_pretrained(device=device)
+            with self._chatterbox_lock:
+                self._chatterbox_model  = model
+                self._chatterbox_loaded = True
+            if progress_callback:
+                progress_callback("Chatterbox loaded — voice cloning ready.")
+        except ImportError:
+            raise RuntimeError(
+                "Chatterbox not installed. Run:  pip install chatterbox-tts"
+            )
+        except Exception as exc:
+            raise RuntimeError(f"Chatterbox load failed: {exc}") from exc
+
+    def _synthesise_chunk_chatterbox(
+        self,
+        text: str,
+        output_path: Path,
+        reference_wav: Optional[Path] = None,
+        exaggeration: float = 0.5,
+        cfg_weight: float = 3.0,
+    ) -> None:
+        """Synthesise one chunk with Chatterbox. Supports voice cloning + emotion."""
+        with self._chatterbox_lock:
+            model = self._chatterbox_model
+        if model is None:
+            raise RuntimeError("Chatterbox model not loaded.")
+
+        import torchaudio
+
+        kwargs: dict = {
+            "exaggeration": max(0.1, min(1.0, exaggeration)),
+            "cfg_weight":   cfg_weight,
+        }
+        if reference_wav and reference_wav.exists():
+            kwargs["audio_prompt_path"] = str(reference_wav)
+
+        # Suppress the attention-mask warning from HuggingFace tokenizer
+        import warnings
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message=".*attention mask.*")
+            wav = model.generate(text, **kwargs)
+
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        torchaudio.save(str(output_path), wav, model.sr)
 
     # ── XTTS v2 (voice cloning) ──────────────────────────────────────────────
 
@@ -517,9 +728,10 @@ class TTSEngine:
         self,
         text: str,
         output_path: Path,
-        voice_profile: str = "Natural Female",
+        voice_profile: str = "Warm Female (US)",
         emotion: str = "Neutral",
         speed: float = 1.0,
+        exaggeration: float = 0.5,      # Chatterbox emotion expressiveness
         language: str = "en",
         output_format: str = "wav",
         reference_wav: Optional[Path] = None,
@@ -538,25 +750,44 @@ class TTSEngine:
             stitch_chunks_to_file, export_mp3, cleanup_temp_directory
         )
 
-        # Determine if we're cloning (Custom Clone or saved profile)
+        with self._lock:
+            engine = self._engine_type
+
+        # ── Determine synthesis route ────────────────────────────────────────
         use_clone = (
             (voice_profile == "Custom (Clone)" and reference_wav is not None)
             or profile_npz is not None
         )
 
+        # Cloning: always prefer Chatterbox, fall back to XTTS
+        use_chatterbox_clone = False
         if use_clone:
             try:
-                self._load_xtts_if_needed()
+                self._load_chatterbox_if_needed()
+                use_chatterbox_clone = True
+                print("[Engine] Cloning via Chatterbox TTS")
             except Exception as exc:
-                if on_error:
-                    on_error(f"Failed to load XTTS v2: {exc}")
-                return None
-        else:
-            speaker_id = VOICE_PROFILES.get(voice_profile, "p225")
+                print(f"[Engine] Chatterbox unavailable ({exc}), falling back to XTTS v2")
+                try:
+                    self._load_xtts_if_needed()
+                except Exception as exc2:
+                    if on_error:
+                        on_error(f"Failed to load cloning engine: {exc2}")
+                    return None
 
-        # Apply delivery-style speed multiplier on top of user speed
+        # Map emotion to exaggeration override for Chatterbox
+        emo_exag = EMOTION_EXAGGERATION.get(emotion)
+        effective_exag = emo_exag if emo_exag is not None else exaggeration
+
+        # Apply speed multiplier for all engines
         emotion_mult    = EMOTION_SPEEDS.get(emotion, 1.0)
         effective_speed = round(speed * emotion_mult, 3)
+
+        # Voice IDs
+        if engine == "kokoro" and not use_clone:
+            kokoro_voice = KOKORO_VOICES.get(voice_profile, "af_heart")
+        elif engine == "vctk" and not use_clone:
+            speaker_id = VOICE_PROFILES.get(voice_profile, "p225")
 
         chunks = chunk_text(text)
         total  = len(chunks)
@@ -566,11 +797,6 @@ class TTSEngine:
                 on_error("No text to synthesise.")
             return None
 
-        # ── Persistent chunk folder ──────────────────────────────────────────
-        # Chunks are saved next to the output file (not in a system temp dir).
-        # If the app crashes mid-synthesis the folder survives so the user can
-        # manually stitch the completed chunks later.
-        #   e.g.  ~/Documents/AuraVoice/aura_voice_20260316_012345_chunks/
         owns_chunk_dir = temp_dir is None
         if owns_chunk_dir:
             output_path = Path(output_path)
@@ -592,7 +818,16 @@ class TTSEngine:
 
                 chunk_path = temp_dir / f"chunk_{idx + 1:04d}.wav"
                 t0 = time.perf_counter()
-                if use_clone:
+
+                if use_clone and use_chatterbox_clone:
+                    self._synthesise_chunk_chatterbox(
+                        text=chunk,
+                        output_path=chunk_path,
+                        reference_wav=reference_wav,
+                        exaggeration=effective_exag,
+                    )
+                elif use_clone:
+                    # XTTS v2 fallback
                     self._synthesise_chunk_xtts(
                         text=chunk,
                         output_path=chunk_path,
@@ -600,7 +835,23 @@ class TTSEngine:
                         language=language,
                         profile_npz=profile_npz,
                     )
+                elif engine == "kokoro":
+                    self._synthesise_chunk_kokoro(
+                        text=chunk,
+                        output_path=chunk_path,
+                        voice=kokoro_voice,
+                        speed=effective_speed,
+                    )
+                elif engine == "chatterbox":
+                    # Chatterbox as primary (no reference = default voice)
+                    self._synthesise_chunk_chatterbox(
+                        text=chunk,
+                        output_path=chunk_path,
+                        reference_wav=None,
+                        exaggeration=effective_exag,
+                    )
                 else:
+                    # VCTK VITS fallback
                     self.synthesise_chunk(
                         text=chunk,
                         output_path=chunk_path,

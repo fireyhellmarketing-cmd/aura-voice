@@ -5,3 +5,7 @@ torch>=2.1.0
 torchaudio>=2.1.0
 Pillow>=10.0.0
 nltk>=3.8.0
+# New high-quality engines (installed automatically on first use)
+kokoro>=0.9.4
+soundfile>=0.12.0
+chatterbox-tts

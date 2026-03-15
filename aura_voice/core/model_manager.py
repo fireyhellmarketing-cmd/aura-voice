@@ -1,5 +1,6 @@
 """AURA VOICE — Model catalog and compatibility layer."""
 
+import importlib.util
 import os
 import json
 import platform as _platform_sys
@@ -13,11 +14,56 @@ from .hardware_detect import HardwareInfo
 # ─── Model Catalog ─────────────────────────────────────────────────────────────
 
 MODEL_CATALOG: Dict[str, Dict[str, Any]] = {
-    "VCTK VITS — Fast English (Default)": {
-        "model_id":             "tts_models/en/vctk/vits",
-        "size_gb":              0.15,
+    "Kokoro — Natural Human Voices": {
+        "model_id":             "kokoro",
+        "engine":               "kokoro",
+        "pip_install":          "kokoro soundfile",
+        "size_gb":              0.33,
         "quality":              5,
         "quality_label":        "★★★★★",
+        "supports_cloning":     False,
+        "supports_emotions":    False,
+        "hardware":             ["cpu", "mps"],
+        "min_ram_gb":           2,
+        "recommended_vram_gb":  0,
+        "languages":            ["English"],
+        "description": (
+            "Human-quality English TTS. "
+            "10 natural US/UK voices, extremely fast on CPU. "
+            "No GPU needed. pip install kokoro soundfile"
+        ),
+        "recommended": True,
+        "tag": "BEST",
+    },
+
+    "Chatterbox — Voice Cloning Pro": {
+        "model_id":             "chatterbox",
+        "engine":               "chatterbox",
+        "pip_install":          "chatterbox-tts",
+        "size_gb":              0.58,
+        "quality":              5,
+        "quality_label":        "★★★★★",
+        "supports_cloning":     True,
+        "supports_emotions":    True,
+        "hardware":             ["cpu", "mps"],
+        "min_ram_gb":           4,
+        "recommended_vram_gb":  0,
+        "languages":            ["English"],
+        "description": (
+            "ElevenLabs-quality voice cloning. "
+            "Emotion exaggeration control. "
+            "Apache 2.0. pip install chatterbox-tts"
+        ),
+        "recommended": False,
+        "tag": "CLONE",
+    },
+
+    "VCTK VITS — Fast English (Default)": {
+        "model_id":             "tts_models/en/vctk/vits",
+        "engine":               "vctk",
+        "size_gb":              0.15,
+        "quality":              3,
+        "quality_label":        "★★★☆☆",
         "supports_cloning":     False,
         "supports_emotions":    False,
         "hardware":             ["cpu", "cuda", "mps"],
@@ -25,12 +71,12 @@ MODEL_CATALOG: Dict[str, Dict[str, Any]] = {
         "recommended_vram_gb":  0,
         "languages":            ["English"],
         "description": (
-            "Best quality English TTS. 109 natural-sounding speakers. "
-            "Extremely fast (~0.13x real-time). Works great on CPU. "
-            "Requires espeak-ng: brew install espeak-ng"
+            "Legacy fast English TTS. 109 speakers. "
+            "Requires espeak-ng: brew install espeak-ng. "
+            "Use Kokoro for better quality."
         ),
-        "recommended": True,
-        "tag": "BEST",
+        "recommended": False,
+        "tag": "LEGACY",
     },
 
     "XTTS v2 — Multilingual Pro": {
@@ -166,7 +212,14 @@ def get_model_cache_path(model_id: str) -> Path:
 
 
 def is_model_downloaded(model_id: str) -> bool:
-    """Return True if the model directory exists on any known cache path."""
+    """Return True if the model/package is available."""
+    # Pip-package engines — check importability
+    if model_id == "kokoro":
+        return importlib.util.find_spec("kokoro") is not None
+    if model_id == "chatterbox":
+        return importlib.util.find_spec("chatterbox") is not None
+
+    # Coqui/TTS models — check cache directory
     slug = model_id.replace("/", "--")
     candidates = [
         get_model_cache_root() / slug,
@@ -259,7 +312,7 @@ def load_config() -> dict:
     """Load config from ~/.aura_voice_config.json, return defaults if missing."""
     defaults = {
         "first_run": True,
-        "selected_model": "XTTS v2 — Multilingual Pro",
+        "selected_model": "Kokoro — Natural Human Voices",
         "device": "cpu",
         "output_dir": str(Path.home() / "Documents" / "AuraVoice"),
         "filename_pattern": "aura_voice_{date}_{time}",
@@ -278,6 +331,12 @@ def load_config() -> dict:
             defaults.update(saved)
         except Exception:
             pass
+    # Migrate old model names that no longer exist in catalog
+    _legacy = {"XTTS v2 — Multilingual Pro", "YourTTS — Fast Multilingual",
+               "Glow-TTS — Fast English", "FastPitch — English Pro",
+               "VITS — Lightweight English"}
+    if defaults.get("selected_model") in _legacy:
+        defaults["selected_model"] = "Kokoro — Natural Human Voices"
     return defaults
 
 
