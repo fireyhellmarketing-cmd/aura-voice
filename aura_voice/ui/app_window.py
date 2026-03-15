@@ -224,6 +224,9 @@ class AuraVoiceApp(ctk.CTk):
         self._voice_panel.grid(row=0, column=3, sticky="ns")
         self._voice_panel.on_save_profile = self._save_voice_profile
 
+        # Give main_view a reference to wave_canvas for audio-reactive visualization
+        self._main_view.wave_canvas_ref = self._wave_canvas
+
         # Set initial config values
         self._voice_panel.set_output_dir(
             self._config.get("output_dir", str(Path.home() / "Documents" / "AuraVoice"))
@@ -742,6 +745,19 @@ class AuraVoiceApp(ctk.CTk):
 
         threading.Thread(target=_dl, daemon=True).start()
 
+    @staticmethod
+    def _resolve_output_path(name: str, output_dir: Path, ext: str) -> Path:
+        """Return a numbered output path that doesn't already exist."""
+        base = output_dir / f"{name}.{ext}"
+        if not base.exists():
+            return base
+        n = 1
+        while True:
+            candidate = output_dir / f"{name}_{n}.{ext}"
+            if not candidate.exists():
+                return candidate
+            n += 1
+
     # ── Synthesis ──────────────────────────────────────────────────────────────
 
     def _start_synthesis(self):
@@ -783,8 +799,10 @@ class AuraVoiceApp(ctk.CTk):
         total      = len(chunks)
         output_dir = Path(settings["output_dir"])
         output_dir.mkdir(parents=True, exist_ok=True)
-        ts         = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_stem = output_dir / f"aura_voice_{ts}"
+        project_name = self._main_view.get_output_name()
+        ext          = settings.get("output_format", "WAV").lower()
+        output_path  = self._resolve_output_path(project_name, output_dir, ext)
+        output_stem  = output_path.with_suffix("")   # engine appends the extension
 
         self._cancel.clear()
         self._gen_total = total

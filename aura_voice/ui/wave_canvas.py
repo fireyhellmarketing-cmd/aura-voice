@@ -84,6 +84,7 @@ class WaveCanvas(ctk.CTkFrame):
 
         self._mode        = "idle"
         self._amp_mult    = 1.0
+        self._audio_level: float = 0.0   # 0..1, driven externally during playback
 
         # Smoothed bar heights (0..1) and their targets
         self._heights: List[float] = [0.0] * _N_BARS
@@ -143,6 +144,10 @@ class WaveCanvas(ctk.CTkFrame):
             self._amp_mult = 1.0
             self._pulse_t  = 0.0
 
+    def set_audio_level(self, level: float):
+        """Set current audio amplitude 0..1 for reactive visualization."""
+        self._audio_level = max(0.0, min(1.0, float(level)))
+
     # ── Animation loop ─────────────────────────────────────────────────────────
 
     def _update_bars(self):
@@ -157,19 +162,20 @@ class WaveCanvas(ctk.CTkFrame):
             self._amp_mult = 1.0 + 0.7 * (1.0 + math.sin(self._pulse_t * 3.2))
 
         elif self._mode == "playing":
-            # Voice-like: lower "frequencies" carry more energy
+            # Voice-like spectral profile driven by actual audio level
+            al = self._audio_level
             for i in range(_N_BARS):
                 if random.random() < 0.45:
-                    # Map bar index to a frequency-like profile
-                    f = i / _N_BARS              # 0 .. 1
-                    # Voice: peak around 0.1-0.4 (low-mid), roll off at high
-                    energy_profile = (
-                        0.15 +
-                        0.75 * max(0.0, math.exp(-((f - 0.25) ** 2) / 0.06)) +
-                        0.35 * max(0.0, math.exp(-((f - 0.75) ** 2) / 0.04)) * random.random()
+                    f = i / _N_BARS
+                    # Two spectral peaks: fundamental (low-mid) + harmonics (mid-high)
+                    energy = (
+                        al * 0.85 * max(0.0, math.exp(-((f - 0.22) ** 2) / 0.05)) +
+                        al * 0.50 * max(0.0, math.exp(-((f - 0.55) ** 2) / 0.04)) * random.random() +
+                        al * 0.25 * max(0.0, math.exp(-((f - 0.78) ** 2) / 0.03)) * random.random() +
+                        0.04  # floor
                     )
-                    self._targets[i] = energy_profile * (0.5 + random.random() * 0.5)
-            self._amp_mult = 0.9 + random.random() * 0.7
+                    self._targets[i] = energy * (0.6 + random.random() * 0.4)
+            self._amp_mult = 0.4 + al * 1.5 + random.random() * 0.15
 
         else:
             # Idle: slow sine ripple — very subtle
@@ -264,15 +270,23 @@ class WaveCanvas(ctk.CTkFrame):
             outline=ring_col, width=1.5, fill=_BG,
         )
 
-        # ── Center orb ──────────────────────────────────────────────────
-        orb_r = inner_r * (0.25 + 0.12 * math.sin(self._pulse_t * 2.5)) * self._amp_mult
+        # ── Center orb — audio-reactive in playing mode ─────────────────────
+        if self._mode == "playing":
+            # Orb pulses directly with audio amplitude
+            orb_base = 0.15 + 0.55 * self._audio_level
+        elif self._mode == "generating":
+            orb_base = 0.25 + 0.20 * (0.5 + 0.5 * math.sin(self._pulse_t * 2.5))
+        else:
+            orb_base = 0.20 + 0.06 * math.sin(self._pulse_t * 1.5)
+
+        orb_r   = inner_r * orb_base * max(0.5, self._amp_mult * 0.6)
         orb_col = _lerp_color(_PALETTE, (self._phase * 0.20) % 1.0, 0.85)
-        # Outer glow
-        og = orb_r * 2.0
+        # Outer glow halo
+        og = orb_r * 2.2
         c.create_oval(cx - og, cy - og, cx + og, cy + og,
-                      fill=_lerp_color(_PALETTE, (self._phase * 0.20) % 1.0, 0.12),
+                      fill=_lerp_color(_PALETTE, (self._phase * 0.20) % 1.0, 0.10),
                       outline="")
-        # Core
+        # Core orb
         c.create_oval(cx - orb_r, cy - orb_r, cx + orb_r, cy + orb_r,
                       fill=orb_col, outline="")
 

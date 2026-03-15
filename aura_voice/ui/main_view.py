@@ -116,6 +116,18 @@ class MainView(ctk.CTkFrame):
         # Generation progress state
         self._gen_total = 0
 
+        # Output naming
+        self._auto_name_locked = False   # True once user manually edits name
+
+        # Audio analysis (for reactive visualization)
+        self.wave_canvas_ref = None      # set by app_window
+        self._audio_envelope: list = []
+        self._audio_envelope_dt: float  = 0.05   # seconds per envelope frame
+
+        # Elapsed generation timer
+        self._gen_start_time: float = 0.0
+        self._elapsed_str: str = "00:00"
+
         self._build()
 
     # ── Build ──────────────────────────────────────────────────────────────────
@@ -143,6 +155,7 @@ class MainView(ctk.CTkFrame):
 
         self._build_upload_strip()
         self._build_textarea()
+        self._build_name_field()
         self._build_generate_btn()
         self._build_progress_area()
         self._build_output_card()
@@ -264,7 +277,7 @@ class MainView(ctk.CTkFrame):
 
         self._textarea.bind("<FocusIn>",  self._on_textarea_focus_in)
         self._textarea.bind("<FocusOut>", self._on_textarea_focus_out)
-        self._textarea.bind("<KeyRelease>", self._update_char_count)
+        self._textarea.bind("<KeyRelease>", self._on_text_changed)
 
         # Char count row
         count_row = ctk.CTkFrame(ta_container, fg_color="transparent", height=20)
@@ -314,6 +327,41 @@ class MainView(ctk.CTkFrame):
             text_color=color,
         )
 
+    def _on_text_changed(self, event=None):
+        self._update_char_count(event)
+        # Auto-suggest project name from first words
+        if not self._placeholder_active:
+            text = self._textarea.get("0.0", "end").strip()
+            if text:
+                self.suggest_output_name(text)
+
+    def _build_name_field(self):
+        """Project name row — determines the output filename."""
+        row = ctk.CTkFrame(self._scroll, fg_color="transparent")
+        row.pack(fill="x", padx=PAD["xl"], pady=(0, PAD["sm"]))
+
+        ctk.CTkLabel(
+            row, text="Project Name",
+            font=FONTS["xs"], text_color=TEXT_DIM,
+            width=84, anchor="w",
+        ).pack(side="left")
+
+        self._name_entry = ctk.CTkEntry(
+            row,
+            fg_color=SURFACE,
+            border_color=BORDER2,
+            border_width=1,
+            text_color=TEXT,
+            placeholder_text="my_project",
+            font=FONTS["base"],
+            height=30,
+        )
+        self._name_entry.insert(0, "aura_voice")
+        self._name_entry.pack(side="left", fill="x", expand=True, padx=(8, 0))
+
+        # When user manually edits, lock auto-suggest
+        self._name_entry.bind("<Key>", lambda _: setattr(self, "_auto_name_locked", True))
+
     def _build_generate_btn(self):
         self._gen_btn = ctk.CTkButton(
             self._scroll,
@@ -329,7 +377,7 @@ class MainView(ctk.CTkFrame):
         self._gen_btn.pack(fill="x", padx=PAD["xl"], pady=(0, PAD["md"]))
 
     def _build_progress_area(self):
-        """Generation progress bar + chunk label — hidden until generating."""
+        """Generation progress bar + labels — hidden until generating."""
         self._progress_frame = ctk.CTkFrame(
             self._scroll,
             fg_color=SURFACE3,
@@ -347,14 +395,26 @@ class MainView(ctk.CTkFrame):
         self._progress_bar.set(0)
         self._progress_bar.pack(fill="x", padx=PAD["md"], pady=(PAD["sm"], 4))
 
-        self._progress_label = ctk.CTkLabel(
-            self._progress_frame,
+        lbl_row = ctk.CTkFrame(self._progress_frame, fg_color="transparent")
+        lbl_row.pack(fill="x", padx=PAD["md"], pady=(0, PAD["sm"]))
+
+        self._progress_chunk_lbl = ctk.CTkLabel(
+            lbl_row,
             text="Starting...",
-            font=(FONTS["mono_xs"][0], 11),
+            font=(FONTS["mono_xs"][0], 10),
             text_color=TEXT_SUB,
-            anchor="center",
+            anchor="w",
         )
-        self._progress_label.pack(pady=(0, PAD["sm"]))
+        self._progress_chunk_lbl.pack(side="left")
+
+        self._progress_time_lbl = ctk.CTkLabel(
+            lbl_row,
+            text="",
+            font=(FONTS["mono_xs"][0], 10),
+            text_color=TEXT_DIM,
+            anchor="e",
+        )
+        self._progress_time_lbl.pack(side="right")
 
     def _on_generate_click(self):
         if self.on_generate:
@@ -534,6 +594,11 @@ class MainView(ctk.CTkFrame):
         self._playing        = False
         self._paused         = False
         self._play_offset_ms = 0
+        if self.wave_canvas_ref:
+            try:
+                self.wave_canvas_ref.set_audio_level(0.0)
+            except Exception:
+                pass
         try:
             self._play_btn.configure(text="▶")
             self._player_bar.set(0)
@@ -552,9 +617,15 @@ class MainView(ctk.CTkFrame):
             dur = self._play_duration
             if dur > 0:
                 self._player_bar.set(min(elapsed / dur, 1.0))
+            # Drive wave canvas with real audio amplitude
+            if self.wave_canvas_ref and self._audio_envelope:
+                pos_s   = (elapsed + self._play_offset_ms) / 1000.0
+                frame   = int(pos_s / self._audio_envelope_dt)
+                if 0 <= frame < len(self._audio_envelope):
+                    self.wave_canvas_ref.set_audio_level(self._audio_envelope[frame])
         except Exception:
             pass
-        self.after(200, self._tick_player)
+        self.after(40, self._tick_player)
 
     # ── Action buttons ─────────────────────────────────────────────────────────
 
@@ -619,9 +690,15 @@ class MainView(ctk.CTkFrame):
             )
             self._gen_total = max(total, 1)
             self._progress_bar.set(0)
-            self._progress_label.configure(text="Starting...")
+            self._progress_chunk_lbl.configure(text="Starting…")
+            self._progress_time_lbl.configure(text="")
             if not self._progress_frame.winfo_ismapped():
                 self._progress_frame.pack(fill="x", padx=PAD["xl"], pady=(0, PAD["md"]))
+            # Start elapsed ticker
+            import time as _t
+            self._gen_start_time = _t.time()
+            self._elapsed_str = "00:00"
+            self._tick_elapsed()
         else:
             self._gen_btn.configure(
                 text="  Generate",
@@ -639,17 +716,98 @@ class MainView(ctk.CTkFrame):
         self._gen_total = total
         frac = c / total
         self._progress_bar.set(frac)
-        pct = int(frac * 100)
-        if eta > 0:
-            eta_sec = int(eta)
-            eta_str = f"{eta_sec}s"
+        pct  = int(frac * 100)
+
+        if eta > 60:
+            mins, secs = divmod(int(eta), 60)
+            eta_str = f"{mins}m {secs}s"
+        elif eta > 0:
+            eta_str = f"{int(eta)}s"
         else:
-            eta_str = "..."
-        self._progress_label.configure(
-            text=f"Chunk {c} of {total}  |  {pct}%  |  ETA: {eta_str}"
+            eta_str = "—"
+
+        self._progress_chunk_lbl.configure(
+            text=f"Chunk {c}/{total}  ·  {pct}%"
+        )
+        self._progress_time_lbl.configure(
+            text=f"{self._elapsed_str} elapsed  |  ETA {eta_str}"
         )
         if not self._progress_frame.winfo_ismapped():
             self._progress_frame.pack(fill="x", padx=PAD["xl"], pady=(0, PAD["md"]))
+
+    def _tick_elapsed(self):
+        """Update elapsed timer label every second while generating."""
+        if not self._progress_frame.winfo_ismapped():
+            return
+        import time as _t
+        elapsed = int(_t.time() - self._gen_start_time)
+        mins, secs = divmod(elapsed, 60)
+        self._elapsed_str = f"{mins:02d}:{secs:02d}"
+        # Refresh time label if ETA hasn't been set yet
+        try:
+            current = self._progress_time_lbl.cget("text")
+            if current == "" or current.startswith("00:00"):
+                self._progress_time_lbl.configure(
+                    text=f"{self._elapsed_str} elapsed  |  ETA …"
+                )
+        except Exception:
+            pass
+        self.after(1000, self._tick_elapsed)
+
+    def get_output_name(self) -> str:
+        """Return sanitised project name from the name field."""
+        import re
+        try:
+            val = self._name_entry.get().strip()
+        except Exception:
+            val = "aura_voice"
+        val = re.sub(r"[^\w\-]", "_", val).strip("_")
+        return val or "aura_voice"
+
+    def suggest_output_name(self, text: str):
+        """Auto-fill name field from first words of script (if not locked)."""
+        if self._auto_name_locked:
+            return
+        import re
+        words = re.sub(r"[^\w\s]", "", text).split()[:4]
+        if words:
+            name = "_".join(w.lower() for w in words)[:32]
+            try:
+                self._name_entry.delete(0, "end")
+                self._name_entry.insert(0, name)
+            except Exception:
+                pass
+
+    def _analyze_audio_async(self, path):
+        """Background thread: compute RMS envelope for reactive visualization."""
+        import threading
+        def _run():
+            try:
+                import wave as _wave
+                import numpy as np
+                with _wave.open(str(path), "rb") as wf:
+                    sr   = wf.getframerate()
+                    nch  = wf.getnchannels()
+                    sw   = wf.getsampwidth()
+                    raw  = wf.readframes(wf.getnframes())
+                dtype   = np.int16 if sw == 2 else np.int32
+                samples = np.frombuffer(raw, dtype=dtype).astype(np.float32)
+                if nch > 1:
+                    samples = samples.reshape(-1, nch).mean(axis=1)
+                peak = np.max(np.abs(samples)) or 1.0
+                samples /= peak
+                # 40ms RMS windows
+                win = int(sr * 0.04)
+                envelope = []
+                for i in range(0, len(samples) - win, win):
+                    chunk = samples[i:i + win]
+                    rms   = float(np.sqrt(np.mean(chunk ** 2)))
+                    envelope.append(min(1.0, rms * 2.5))   # boost quiet audio
+                self._audio_envelope    = envelope
+                self._audio_envelope_dt = 0.04
+            except Exception:
+                self._audio_envelope = []
+        threading.Thread(target=_run, daemon=True).start()
 
     def show_output(self, path: Path, duration_str: str):
         """Reveal the output card after a successful generation."""
@@ -677,6 +835,9 @@ class MainView(ctk.CTkFrame):
         self._duration_badge.configure(text=f"  {duration_str}  ")
         self._player_bar.set(0)
         self._play_btn.configure(text="▶")
+        # Pre-analyse audio for reactive visualisation
+        self._audio_envelope = []
+        self._analyze_audio_async(path)
 
         # Show card
         if not self._output_card.winfo_ismapped():
