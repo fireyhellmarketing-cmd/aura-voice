@@ -212,7 +212,6 @@ class AuraVoiceApp(ctk.CTk):
         self._main_view = MainView(body)
         self._main_view.grid(row=0, column=1, sticky="nsew")
         self._main_view.on_generate = self._start_synthesis
-        self._voice_panel.on_save_profile = self._save_voice_profile
 
         # Wave canvas
         from ui.wave_canvas import WaveCanvas
@@ -223,6 +222,7 @@ class AuraVoiceApp(ctk.CTk):
         from ui.voice_panel import VoicePanel
         self._voice_panel = VoicePanel(body)
         self._voice_panel.grid(row=0, column=3, sticky="ns")
+        self._voice_panel.on_save_profile = self._save_voice_profile
 
         # Set initial config values
         self._voice_panel.set_output_dir(
