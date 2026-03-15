@@ -254,11 +254,11 @@ class AuraVoiceApp(ctk.CTk):
         )
         self._model_pill.pack(side="left", padx=(0, PAD["md"]))
 
-        # App name in Georgia italic bold (Instrument Serif fallback)
+        # App name — Georgia italic (CTk font tuples only support a single style keyword)
         ctk.CTkLabel(
             brand,
             text=APP_NAME,
-            font=("Georgia", 20, "bold italic"),
+            font=("Georgia", 20, "italic"),
             text_color=TEXT,
         ).pack(side="left")
 
@@ -843,7 +843,7 @@ class AuraVoiceApp(ctk.CTk):
 
         ctk.CTkLabel(
             col, text=APP_NAME,
-            font=("Georgia", 18, "bold italic"), text_color=TEXT, anchor="w",
+            font=("Georgia", 18, "italic"), text_color=TEXT, anchor="w",
         ).pack(anchor="w")
 
         ctk.CTkLabel(
