@@ -26,16 +26,19 @@ CHUNK_TARGET_WORDS = 100   # VITS handles shorter chunks best
 CHUNK_MAX_WORDS    = 150
 
 # Friendly voice profile name → VCTK speaker ID
-# Chosen for clarity and naturalness across the 109-speaker set.
+# Names must exactly match controls_panel.py VOICE_PROFILES list.
 VOICE_PROFILES: Dict[str, str] = {
-    "Natural Female":        "p225",   # clear, neutral British female
-    "Natural Male":          "p226",   # clear, neutral British male
-    "Warm & Friendly":       "p270",   # warm female
-    "Professional Narrator": "p236",   # authoritative female
-    "Energetic & Upbeat":    "p248",   # bright, expressive female
-    "Calm & Soothing":       "p245",   # calm male
-    "Deep Male Voice":       "p260",   # deeper male voice
-    "Young Female":          "p330",   # young female
+    "Natural Female":            "p225",   # clear, neutral British female
+    "Natural Male":              "p226",   # clear, neutral British male
+    "Warm Female":               "p270",   # warm, expressive female
+    "Deep Male":                 "p260",   # deep male voice
+    "Youthful Female":           "p330",   # young, bright female
+    "Authoritative Male":        "p247",   # authoritative male
+    "Calm Female — British":     "p236",   # calm, clear British female
+    "Energetic Male — American": "p374",   # energetic male
+    "Soft Whispery Female":      "p228",   # soft, gentle female
+    "Professional Narrator":     "p245",   # clear narrator male
+    "Custom (Clone)":            "p225",   # fallback — VCTK doesn't support cloning
 }
 
 # Kept for UI compatibility — VITS doesn't use emotion conditioning

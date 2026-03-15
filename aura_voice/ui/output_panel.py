@@ -371,9 +371,8 @@ class OutputPanel(ctk.CTkFrame):
         ctrl_row = ctk.CTkFrame(player_frame, fg_color="transparent")
         ctrl_row.pack(fill="x")
 
-        # Play/Pause button
-        self._play_overlay.configure(text="▶")   # keep overlay in sync
-        ctk.CTkButton(
+        # Play/Pause button (stored so we can update its label)
+        self._play_btn = ctk.CTkButton(
             ctrl_row,
             text="▶",
             width=38, height=32,
@@ -383,7 +382,8 @@ class OutputPanel(ctk.CTkFrame):
             corner_radius=RADIUS["md"],
             font=(FONTS["base"][0], 14),
             command=self._toggle_play,
-        ).pack(side="left", padx=(0, 4))
+        )
+        self._play_btn.pack(side="left", padx=(0, 4))
 
         ctk.CTkButton(
             ctrl_row,
@@ -516,8 +516,9 @@ class OutputPanel(ctk.CTkFrame):
         self._play_duration  = self._get_duration_ms(self._current.audio_path)
         self._stop_event.clear()
 
-        if hasattr(self, "_play_overlay"):
-            self._play_overlay.configure(text="⏸")
+        for btn in ("_play_overlay", "_play_btn"):
+            if hasattr(self, btn):
+                getattr(self, btn).configure(text="⏸")
         if hasattr(self, "_waveform"):
             self._waveform.start_animation()
 
@@ -535,8 +536,8 @@ class OutputPanel(ctk.CTkFrame):
             pygame.mixer.music.unpause()
             self._paused        = False
             self._play_start_ms = time.time() * 1000 - self._play_offset_ms
-            if hasattr(self, "_play_overlay"):
-                self._play_overlay.configure(text="⏸")
+            for btn in ("_play_overlay", "_play_btn"):
+                if hasattr(self, btn): getattr(self, btn).configure(text="⏸")
             if hasattr(self, "_waveform"):
                 self._waveform.start_animation()
         else:
@@ -544,8 +545,8 @@ class OutputPanel(ctk.CTkFrame):
             pygame.mixer.music.pause()
             self._play_offset_ms = int(time.time() * 1000 - self._play_start_ms)
             self._paused = True
-            if hasattr(self, "_play_overlay"):
-                self._play_overlay.configure(text="▶")
+            for btn in ("_play_overlay", "_play_btn"):
+                if hasattr(self, btn): getattr(self, btn).configure(text="▶")
             if hasattr(self, "_waveform"):
                 self._waveform.stop_animation()
 
@@ -564,8 +565,8 @@ class OutputPanel(ctk.CTkFrame):
             except Exception:
                 pass
             self._play_proc = None
-        if hasattr(self, "_play_overlay"):
-            self._play_overlay.configure(text="▶")
+        for btn in ("_play_overlay", "_play_btn"):
+            if hasattr(self, btn): getattr(self, btn).configure(text="▶")
         if hasattr(self, "_waveform"):
             self._waveform.stop_animation()
         # Reset progress bar + time
