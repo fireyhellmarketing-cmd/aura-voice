@@ -1,4 +1,4 @@
-"""AURA VOICE v2 — Main application window."""
+"""AURA VOICE v3 — Main application window (centered single-column layout)."""
 
 from __future__ import annotations
 
@@ -19,32 +19,30 @@ import customtkinter as ctk
 from assets.styles import (
     APP_NAME, APP_VERSION, APP_TAGLINE,
     FONTS, PAD, WINDOW,
-    BG, PANEL, CARD,
-    ACCENT,
-    TEXT, TEXT_SUB, TEXT_MUTED,
-    BORDER,
+    BG_DEEP, SURFACE, BORDER, BORDER2,
+    ACCENT, ACCENT_HOV,
+    TEXT, TEXT_SUB, TEXT_DIM,
+    ACCENT_DIM,
     SUCCESS, SUCCESS_BG, WARNING, ERROR,
     apply_ctk_theme,
 )
-from core.model_manager import load_config, save_config, MODEL_CATALOG
+from core.model_manager import load_config, MODEL_CATALOG
 from core.tts_engine import TTSEngine, LANGUAGE_CODES
-from ui.sidebar import Sidebar
-from ui.controls_panel import ControlsPanel
-from ui.output_panel import OutputPanel
-from ui.bottom_bar import BottomBar
+from ui.main_view import MainView
+from ui.settings_sheet import SettingsSheet
 from ui.terminal_widget import TerminalWidget
 
 
 # ─── Queue message types ────────────────────────────────────────────────────────
-_Q_CHUNK_START   = "chunk_start"
-_Q_CHUNK_DONE    = "chunk_done"
-_Q_STITCH_START  = "stitch_start"
-_Q_STITCH_PROG   = "stitch_prog"
-_Q_EXPORT_START  = "export_start"
-_Q_COMPLETE      = "complete"
-_Q_ERROR         = "error"
-_Q_MODEL_STATUS  = "model_status"
-_Q_DL_PROGRESS   = "dl_progress"
+_Q_CHUNK_START  = "chunk_start"
+_Q_CHUNK_DONE   = "chunk_done"
+_Q_STITCH_START = "stitch_start"
+_Q_STITCH_PROG  = "stitch_prog"
+_Q_EXPORT_START = "export_start"
+_Q_COMPLETE     = "complete"
+_Q_ERROR        = "error"
+_Q_MODEL_STATUS = "model_status"
+_Q_DL_PROGRESS  = "dl_progress"
 
 
 # ─── Stderr interceptor ────────────────────────────────────────────────────────
@@ -58,14 +56,16 @@ class _StderrCapture:
 
     def __init__(self, ui_queue: queue.Queue):
         self._q    = ui_queue
-        self._real = sys.__stderr__
+        # sys.__stderr__ is always a real stream; cast to satisfy type-checkers.
+        import io
+        self._real: io.TextIOBase = sys.__stderr__  # type: ignore[assignment]
 
     def write(self, text: str):
-        self._real.write(text)
+        self._real.write(text)  # type: ignore[union-attr]
         self._parse(text)
 
     def flush(self):
-        self._real.flush()
+        self._real.flush()  # type: ignore[union-attr]
 
     def _parse(self, text: str):
         m = self._SIZE_RE.search(text)
@@ -77,33 +77,32 @@ class _StderrCapture:
                 return
         p = self._PCT_RE.search(text)
         if p:
-            pct = int(p.group(1))
-            self._q.put((_Q_DL_PROGRESS, (pct, 100)))
+            self._q.put((_Q_DL_PROGRESS, (int(p.group(1)), 100)))
 
 
 # ─── Main Application Window ───────────────────────────────────────────────────
 
 class AuraVoiceApp(ctk.CTk):
     """
-    AURA VOICE v2 main window.
+    AURA VOICE v3 main window — centered single-column layout.
 
-    Layout:
-    ┌───────────────────────────────────────────────────────────────┐
-    │  TITLEBAR (app name, model pill, controls)                    │
-    ├──┬────────────────────────┬──────────────────────────────────-┤
-    │  │  CONTROLS PANEL        │  OUTPUT / SETTINGS / HISTORY      │
-    │S │  (320px fixed)         │  (fills remaining width)          │
-    │I │                        │                                   │
-    │D │                        │                                   │
-    │E │                        │                                   │
-    │B │                        │                                   │
-    │A │                        │                                   │
-    │R │                        │                                   │
-    ├──┴────────────────────────┴───────────────────────────────────┤
-    │  BOTTOM BAR (progress, status, cancel, open folder)           │
-    ├────────────────────────────────────────────────────────────────┤
-    │  TERMINAL (collapsible)                                        │
-    └────────────────────────────────────────────────────────────────┘
+    ┌─────────────────────────────────────────────────────┐
+    │  TITLE BAR  (macOS controls · AURA VOICE · ⚙)       │
+    ├─────────────────────────────────────────────────────┤
+    │                                                     │
+    │          ┌───── centered column ─────┐             │
+    │          │  upload strip             │             │
+    │          │  textarea                 │             │
+    │          │  [voice] [speed] [emotion]│             │
+    │          │  [  Generate  ]           │             │
+    │          │  output card              │             │
+    │          └───────────────────────────┘             │
+    │                                                     │
+    ├─────────────────────────────────────────────────────┤
+    │  TERMINAL (collapsible)                             │
+    └─────────────────────────────────────────────────────┘
+
+    Settings sheet slides in from the right when the gear icon is clicked.
     """
 
     WINDOW_TITLE = f"{APP_NAME} v{APP_VERSION}"
@@ -118,27 +117,31 @@ class AuraVoiceApp(ctk.CTk):
 
         # ── State ──
         os.environ.setdefault("COQUI_TOS_AGREED", "1")
-        self._cancel         = threading.Event()
+        self._cancel        = threading.Event()
         self._q: queue.Queue = queue.Queue()
-        self._synth_thread:  Optional[threading.Thread] = None
-        self._last_output:   Optional[Path] = None
-        self._project_path:  Optional[Path] = None
-        self._current_section = "generate"
+        self._synth_thread: Optional[threading.Thread] = None
+        self._last_output:  Optional[Path] = None
+        self._project_path: Optional[Path] = None
+
+        # Generation progress tracking (for status messages)
+        self._gen_total  = 1
+        self._gen_done   = 0
+        self._gen_start  = 0.0
 
         # ── Engine ──
         self._engine = TTSEngine()
 
-        # ── Window setup ──
+        # ── Window ──
         self.title(self.WINDOW_TITLE)
         self.geometry(f"{WINDOW['width']}x{WINDOW['height']}")
         self.minsize(WINDOW['min_width'], WINDOW['min_height'])
-        self.configure(fg_color=BG)
+        self.configure(fg_color=BG_DEEP)
 
         self._build_menu()
         self._build_ui()
         self._start_poll()
 
-        # Attempt to load the configured model after a short delay
+        # Load model after window is ready
         self.after(400, self._check_model)
 
     # ── Menu ───────────────────────────────────────────────────────────────────
@@ -165,20 +168,18 @@ class AuraVoiceApp(ctk.CTk):
         f.add_command(label="Quit",                  command=self.quit, accelerator="Cmd+Q")
 
         v = _m("View")
-        v.add_command(label="Toggle Dark / Light",      command=self._toggle_theme)
-        v.add_command(label="Show / Hide Terminal",     command=self._toggle_terminal)
+        v.add_command(label="Toggle Dark / Light",   command=self._toggle_theme)
+        v.add_command(label="Show / Hide Terminal",  command=self._toggle_terminal)
         v.add_separator()
-        v.add_command(label="Generate",                 command=lambda: self._navigate("generate"))
-        v.add_command(label="History",                  command=lambda: self._navigate("history"))
-        v.add_command(label="Settings",                 command=lambda: self._navigate("settings"))
+        v.add_command(label="Settings",              command=self._toggle_settings)
+        v.add_command(label="History",               command=self._show_history)
 
         h = _m("Help")
-        h.add_command(label="About AURA VOICE",         command=self._show_about)
-        h.add_command(label="Check Model Cache",        command=self._check_cache_info)
+        h.add_command(label="About AURA VOICE",      command=self._show_about)
+        h.add_command(label="Check Model Cache",     command=self._check_cache_info)
 
         self.config(menu=mb)
 
-        # Keyboard shortcuts
         self.bind_all("<Command-n>", lambda _: self._new_project())
         self.bind_all("<Command-o>", lambda _: self._open_project())
         self.bind_all("<Command-s>", lambda _: self._save_project())
@@ -186,334 +187,223 @@ class AuraVoiceApp(ctk.CTk):
     # ── Layout ─────────────────────────────────────────────────────────────────
 
     def _build_ui(self):
-        self.rowconfigure(0, weight=0)   # titlebar
-        self.rowconfigure(1, weight=1)   # body
-        self.rowconfigure(2, weight=0)   # bottom bar
-        self.rowconfigure(3, weight=0)   # terminal
+        self.rowconfigure(0, weight=0)  # title bar
+        self.rowconfigure(1, weight=1)  # body
+        self.rowconfigure(2, weight=0)  # terminal
         self.columnconfigure(0, weight=1)
 
-        # ── Title bar ──
+        # Title bar
         self._build_titlebar()
 
-        # ── Body row ──
-        body = ctk.CTkFrame(self, fg_color="transparent", corner_radius=0)
+        # Body — holds main view
+        body = ctk.CTkFrame(self, fg_color=BG_DEEP, corner_radius=0)
         body.grid(row=1, column=0, sticky="nsew")
         body.rowconfigure(0, weight=1)
-        body.columnconfigure(0, weight=0)   # sidebar
-        body.columnconfigure(1, weight=0)   # controls panel
-        body.columnconfigure(2, weight=1)   # output / settings
+        body.columnconfigure(0, weight=1)
 
-        # Sidebar
-        self._sidebar = Sidebar(
-            body,
-            on_nav=self._navigate,
-            initial_section="generate",
-        )
-        self._sidebar.grid(row=0, column=0, sticky="nsew")
-
-        # Thin separator
-        ctk.CTkFrame(
-            body, fg_color=BORDER, width=1, corner_radius=0,
-        ).grid(row=0, column=1, sticky="ns")
-
-        # Controls panel (always visible)
-        self._controls = ControlsPanel(
-            body,
-            on_generate=self._start_synthesis,
-            on_load_txt=None,
-            on_load_project=self._open_project,
-            on_output_folder_change=self._on_output_folder_change,
-        )
-        self._controls.grid(row=0, column=2, sticky="nsew")
-        # Apply saved output dir
-        self._controls.set_output_dir(
+        # Main centered view
+        self._main_view = MainView(body)
+        self._main_view.grid(row=0, column=0, sticky="nsew")
+        self._main_view.on_generate = self._start_synthesis
+        self._main_view.set_output_dir(
             self._config.get("output_dir", str(Path.home() / "Documents" / "AuraVoice"))
         )
-
-        # Thin separator
-        ctk.CTkFrame(
-            body, fg_color=BORDER, width=1, corner_radius=0,
-        ).grid(row=0, column=3, sticky="ns")
-
-        # Output panel (right side, takes remaining width)
-        body.columnconfigure(3, weight=0)
-        body.columnconfigure(4, weight=1)
-
-        self._output = OutputPanel(
-            body,
-            on_play=None,
-            on_save=None,
-            on_delete=None,
-        )
-        self._output.grid(row=0, column=4, sticky="nsew")
-
-        # Settings view (hidden, swaps with output)
-        from ui.settings_view import SettingsView
-        self._settings_view = SettingsView(
-            body,
-            config=self._config,
-            on_config_change=self._on_settings_change,
+        self._main_view.set_output_format(
+            self._config.get("output_format", "WAV")
         )
 
-        # History view (simple placeholder)
-        self._history_view = self._build_history_view(body)
-
-        # ── Bottom bar ──
-        self._bar = BottomBar(
-            self,
-            on_cancel=self._cancel_synthesis,
-            on_open_file=self._open_folder,
-        )
-        self._bar.grid(row=2, column=0, sticky="ew")
-
-        # ── Terminal ──
+        # Terminal (collapsible, row 2)
         self._terminal = TerminalWidget(
             self,
             cwd=str(Path(__file__).resolve().parent.parent),
         )
-        self._terminal.grid(row=3, column=0, sticky="ew")
+        self._terminal.grid(row=2, column=0, sticky="ew")
+
+        # Settings sheet (placed over body, starts off-screen)
+        self._settings_sheet = SettingsSheet(
+            self,
+            config=self._config,
+            on_close=None,
+            on_config_change=self._on_settings_change,
+        )
 
     def _build_titlebar(self):
-        tbar = ctk.CTkFrame(self, fg_color=PANEL, corner_radius=0, height=52)
+        tbar = ctk.CTkFrame(self, fg_color=BG_DEEP, corner_radius=0, height=52)
         tbar.grid(row=0, column=0, sticky="ew")
         tbar.grid_propagate(False)
-        tbar.columnconfigure(1, weight=1)
+        tbar.columnconfigure(0, weight=1)   # spacer left
+        tbar.columnconfigure(1, weight=0)   # centered title
+        tbar.columnconfigure(2, weight=1)   # spacer right (gear lives here)
 
-        # Left accent stripe
-        ctk.CTkFrame(tbar, width=3, fg_color=ACCENT, corner_radius=0).grid(
-            row=0, column=0, sticky="ns",
-        )
+        # Left spacer (macOS traffic-light area)
+        left_pad = ctk.CTkFrame(tbar, fg_color="transparent", width=80)
+        left_pad.grid(row=0, column=0, sticky="w")
 
-        # Brand area
+        # ── Center: brand name ──
         brand = ctk.CTkFrame(tbar, fg_color="transparent")
-        brand.grid(row=0, column=1, sticky="w", padx=(PAD["lg"], 0))
+        brand.grid(row=0, column=1)
 
-        ctk.CTkLabel(
-            brand,
-            text=f"  {APP_NAME}",
-            font=FONTS["xl_bold"],
-            text_color=ACCENT,
-        ).pack(side="left")
-
-        ctk.CTkLabel(
-            brand,
-            text=f"  {APP_TAGLINE}",
-            font=FONTS["sm"],
-            text_color=TEXT_MUTED,
-        ).pack(side="left")
-
-        # Right side: model pill + version
-        right = ctk.CTkFrame(tbar, fg_color="transparent")
-        right.grid(row=0, column=2, padx=PAD["xl"], sticky="e")
-
+        # Model status pill (left of title)
         self._model_pill = ctk.CTkLabel(
-            right,
-            text="○  Loading model…",
+            brand,
+            text="  ◌ Loading…  ",
             font=FONTS["xs"],
-            text_color=TEXT_MUTED,
-            fg_color=CARD,
-            corner_radius=12,
+            text_color=WARNING,
+            fg_color=SURFACE,
+            corner_radius=10,
         )
-        self._model_pill.pack(side="left", padx=(0, PAD["lg"]))
+        self._model_pill.pack(side="left", padx=(0, PAD["md"]))
 
+        # App name in Georgia italic bold (Instrument Serif fallback)
         ctk.CTkLabel(
-            right,
-            text=f"v{APP_VERSION}",
-            font=FONTS["xs"],
-            text_color=TEXT_MUTED,
+            brand,
+            text=APP_NAME,
+            font=("Georgia", 20, "bold italic"),
+            text_color=TEXT,
         ).pack(side="left")
 
-    def _build_history_view(self, parent) -> ctk.CTkFrame:
-        """Scrollable history list with play/open controls per item."""
-        frame = ctk.CTkFrame(parent, fg_color=BG, corner_radius=0)
+        # ── Right: gear icon button ──
+        right_area = ctk.CTkFrame(tbar, fg_color="transparent")
+        right_area.grid(row=0, column=2, sticky="e", padx=(0, PAD["xl"]))
 
-        # ── Header ──
-        header = ctk.CTkFrame(frame, fg_color="transparent", height=52)
-        header.pack(fill="x", padx=PAD["page"], pady=(PAD["xl"], 0))
-        header.pack_propagate(False)
+        self._gear_btn = ctk.CTkButton(
+            right_area,
+            text="⚙",
+            width=34, height=34,
+            fg_color="transparent",
+            hover_color=BORDER2,
+            text_color=TEXT_DIM,
+            corner_radius=17,
+            font=(FONTS["base"][0], 18),
+            command=self._toggle_settings,
+        )
+        self._gear_btn.pack(side="right")
+
+        # Bind hover to change color
+        self._gear_btn.bind("<Enter>", lambda *_: self._gear_btn.configure(text_color=ACCENT_HOV))
+        self._gear_btn.bind("<Leave>", lambda *_: self._gear_btn.configure(text_color=TEXT_DIM))
+
+    # ── Settings sheet ─────────────────────────────────────────────────────────
+
+    def _toggle_settings(self):
+        if self._settings_sheet.is_open():
+            self._settings_sheet.close()
+        else:
+            self._settings_sheet.open()
+
+    def _on_settings_change(self, new_config: dict):
+        self._config.update(new_config)
+        if "output_dir" in new_config:
+            self._main_view.set_output_dir(new_config["output_dir"])
+        if "output_format" in new_config:
+            self._main_view.set_output_format(new_config["output_format"])
+
+    # ── History overlay ────────────────────────────────────────────────────────
+
+    def _show_history(self):
+        """Show a toplevel history window."""
+        records = self._main_view.get_history()
+        win = ctk.CTkToplevel(self)
+        win.title("Generation History")
+        win.geometry("640x500")
+        win.configure(fg_color=BG_DEEP)
+        win.grab_set()
+        win.focus_set()
+
+        hdr = ctk.CTkFrame(win, fg_color="transparent", height=48)
+        hdr.pack(fill="x", padx=PAD["page"])
+        hdr.pack_propagate(False)
 
         ctk.CTkLabel(
-            header,
-            text="Generation History",
-            font=FONTS["2xl_bold"],
-            text_color=TEXT,
-        ).pack(side="left", pady=8)
+            hdr, text="Generation History",
+            font=FONTS["lg_bold"], text_color=TEXT,
+        ).pack(side="left", pady=10)
 
-        self._history_count_lbl = ctk.CTkLabel(
-            header,
-            text="0 items",
-            font=FONTS["sm"],
-            text_color=TEXT_MUTED,
+        ctk.CTkLabel(
+            hdr,
+            text=f"{len(records)} item{'s' if len(records) != 1 else ''}",
+            font=FONTS["sm"], text_color=TEXT_DIM,
+        ).pack(side="right", pady=10)
+
+        ctk.CTkFrame(win, fg_color=BORDER, height=1).pack(fill="x")
+
+        scroll = ctk.CTkScrollableFrame(
+            win, fg_color="transparent",
+            scrollbar_button_color=BORDER2,
+            scrollbar_button_hover_color=BORDER,
         )
-        self._history_count_lbl.pack(side="right", pady=8)
+        scroll.pack(fill="both", expand=True, padx=PAD["page"], pady=PAD["md"])
 
-        ctk.CTkFrame(frame, fg_color=BORDER, height=1).pack(
-            fill="x", padx=PAD["page"], pady=(PAD["xs"], PAD["md"]),
-        )
-
-        # ── Scrollable list ──
-        self._history_scroll = ctk.CTkScrollableFrame(
-            frame,
-            fg_color="transparent",
-            scrollbar_button_color=BORDER,
-            scrollbar_button_hover_color=CARD,
-        )
-        self._history_scroll.pack(fill="both", expand=True, padx=PAD["page"], pady=(0, PAD["md"]))
-
-        # Placeholder shown when empty
-        self._history_empty_lbl = ctk.CTkLabel(
-            self._history_scroll,
-            text="No generations yet.\nGenerate audio and it will appear here.",
-            font=FONTS["base"],
-            text_color=TEXT_MUTED,
-            justify="center",
-        )
-        self._history_empty_lbl.pack(pady=64)
-
-        return frame
-
-    def _refresh_history_view(self):
-        """Rebuild the history list from the output panel's records."""
-        # Clear existing rows
-        for w in self._history_scroll.winfo_children():
-            w.destroy()
-
-        records = self._output.get_history()
-        count = len(records)
-        self._history_count_lbl.configure(
-            text=f"{count} item{'s' if count != 1 else ''}"
-        )
-
-        if count == 0:
+        if not records:
             ctk.CTkLabel(
-                self._history_scroll,
-                text="No generations yet.\nGenerate audio and it will appear here.",
-                font=FONTS["base"],
-                text_color=TEXT_MUTED,
-                justify="center",
-            ).pack(pady=64)
+                scroll,
+                text="No generations yet.",
+                font=FONTS["base"], text_color=TEXT_DIM,
+            ).pack(pady=40)
             return
-
-        from assets.styles import CARD, CARD_HOVER, ACCENT_DIM, ACCENT2, INPUT_BG, RADIUS
-        import time as _time
 
         for rec in records:
             row = ctk.CTkFrame(
-                self._history_scroll,
-                fg_color=CARD,
-                corner_radius=RADIUS["lg"],
-                border_color=BORDER,
+                scroll,
+                fg_color=SURFACE,
+                corner_radius=12,
+                border_color=BORDER2,
                 border_width=1,
             )
             row.pack(fill="x", pady=(0, PAD["md"]))
 
-            # Thumbnail
-            thumb_frame = ctk.CTkFrame(
-                row,
-                fg_color=INPUT_BG,
-                corner_radius=RADIUS["md"],
-                width=64, height=64,
-            )
-            thumb_frame.pack(side="left", padx=(PAD["card"], PAD["sm"]), pady=PAD["card"])
-            thumb_frame.pack_propagate(False)
-
-            if rec.thumbnail_path and rec.thumbnail_path.exists():
-                try:
-                    from PIL import Image
-                    img = Image.open(str(rec.thumbnail_path)).convert("RGB").resize((64, 64), Image.LANCZOS)
-                    cimg = ctk.CTkImage(light_image=img, dark_image=img, size=(64, 64))
-                    lbl = ctk.CTkLabel(thumb_frame, image=cimg, text="")
-                    lbl.image = cimg
-                    lbl.place(relx=0.5, rely=0.5, anchor="center")
-                except Exception:
-                    ctk.CTkLabel(thumb_frame, text="◈", font=(FONTS["xl"][0], 22), text_color=ACCENT_DIM).place(relx=0.5, rely=0.5, anchor="center")
-            else:
-                ctk.CTkLabel(thumb_frame, text="◈", font=(FONTS["xl"][0], 22), text_color=ACCENT_DIM).place(relx=0.5, rely=0.5, anchor="center")
-
-            # Info column
             info = ctk.CTkFrame(row, fg_color="transparent")
-            info.pack(side="left", fill="both", expand=True, pady=PAD["card"])
+            info.pack(side="left", fill="both", expand=True, padx=PAD["card"], pady=PAD["card"])
 
-            title_text = rec.title[:60] + ("…" if len(rec.title) > 60 else "")
-            ctk.CTkLabel(
-                info,
-                text=title_text,
-                font=FONTS["base_bold"],
-                text_color=TEXT,
-                anchor="w",
-            ).pack(anchor="w")
-
-            ctk.CTkLabel(
-                info,
-                text=rec.audio_path.name,
-                font=FONTS["mono_xs"],
-                text_color=TEXT_MUTED,
-                anchor="w",
-            ).pack(anchor="w")
+            title = rec.title[:55] + ("…" if len(rec.title) > 55 else "")
+            ctk.CTkLabel(info, text=title, font=FONTS["sm_bold"], text_color=TEXT, anchor="w").pack(anchor="w")
+            ctk.CTkLabel(info, text=rec.audio_path.name, font=FONTS["mono_xs"], text_color=TEXT_DIM, anchor="w").pack(anchor="w")
 
             meta = ctk.CTkFrame(info, fg_color="transparent")
             meta.pack(anchor="w", pady=(2, 0))
-
             ctk.CTkLabel(
-                meta,
-                text=f"  {rec.duration_str}  ",
-                font=FONTS["xs_bold"],
-                text_color=ACCENT,
-                fg_color=ACCENT_DIM,
-                corner_radius=RADIUS["full"],
+                meta, text=f"  {rec.duration_str}  ",
+                font=FONTS["xs_bold"], text_color=ACCENT, fg_color=ACCENT_DIM,
+                corner_radius=10,
             ).pack(side="left", padx=(0, 4))
-
             ctk.CTkLabel(
-                meta,
-                text=f"  {rec.format_label}  ",
-                font=FONTS["xs_bold"],
-                text_color=ACCENT2,
-                fg_color="#451a03",
-                corner_radius=RADIUS["full"],
+                meta, text=f"  {rec.format_label}  ",
+                font=FONTS["xs_bold"], text_color="#f59e0b", fg_color="#451a03",
+                corner_radius=10,
             ).pack(side="left")
 
-            # Buttons
             btn_col = ctk.CTkFrame(row, fg_color="transparent")
             btn_col.pack(side="right", padx=PAD["card"], pady=PAD["card"])
 
             ctk.CTkButton(
-                btn_col,
-                text="▶  Play",
-                width=88, height=32,
-                fg_color=ACCENT,
-                hover_color="#9d5ef5",
-                text_color=TEXT,
-                corner_radius=RADIUS["md"],
+                btn_col, text="▶  Play",
+                width=88, height=30,
+                fg_color=ACCENT, hover_color=ACCENT_HOV,
+                text_color="#FFFFFF", corner_radius=8,
                 font=FONTS["sm_bold"],
                 command=lambda r=rec: self._history_play(r),
             ).pack(pady=(0, 4))
 
             ctk.CTkButton(
-                btn_col,
-                text="📂  Open",
-                width=88, height=32,
-                fg_color=CARD,
-                hover_color=CARD_HOVER,
-                text_color=TEXT_SUB,
-                border_color=BORDER,
-                border_width=1,
-                corner_radius=RADIUS["md"],
-                font=FONTS["sm"],
+                btn_col, text="📂  Open",
+                width=88, height=30,
+                fg_color="transparent", hover_color=BORDER2,
+                text_color=TEXT_SUB, border_color=BORDER2, border_width=1,
+                corner_radius=8, font=FONTS["xs"],
                 command=lambda r=rec: self._history_open_folder(r),
             ).pack()
 
     def _history_play(self, rec):
-        """Play a history record directly using afplay."""
-        import subprocess, sys as _sys
         if not rec.audio_path.exists():
             messagebox.showerror("Not Found", f"File not found:\n{rec.audio_path}")
             return
+        _plat = sys.platform
         try:
-            if _sys.platform == "darwin":
+            if _plat == "darwin":
                 subprocess.Popen(["afplay", str(rec.audio_path)],
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            elif _sys.platform == "win32":
-                os.startfile(str(rec.audio_path))
+            elif _plat == "win32":
+                os.startfile(str(rec.audio_path))  # type: ignore[attr-defined]
             else:
                 subprocess.Popen(["aplay", str(rec.audio_path)],
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -521,72 +411,31 @@ class AuraVoiceApp(ctk.CTk):
             messagebox.showerror("Playback Error", str(exc))
 
     def _history_open_folder(self, rec):
-        """Reveal a history record's folder in Finder/Explorer."""
+        _plat = sys.platform
         try:
             folder = rec.audio_path.parent
-            if sys.platform == "darwin":
+            if _plat == "darwin":
                 subprocess.call(["open", str(folder)])
-            elif sys.platform == "win32":
-                os.startfile(str(folder))
+            elif _plat == "win32":
+                os.startfile(str(folder))  # type: ignore[attr-defined]
             else:
                 subprocess.call(["xdg-open", str(folder)])
         except Exception as exc:
             messagebox.showerror("Open Folder Error", str(exc))
 
-    # ── Navigation ─────────────────────────────────────────────────────────────
-
-    def _navigate(self, section: str):
-        """Switch the right-hand content area between views."""
-        self._current_section = section
-        self._sidebar.set_active(section)
-
-        # Hide all right-side views
-        for view in [self._output, self._settings_view, self._history_view]:
-            view.grid_forget()
-
-        # Show the appropriate view in column 4
-        if section == "generate":
-            self._output.grid(row=0, column=4, sticky="nsew")
-        elif section == "settings":
-            self._settings_view.grid(row=0, column=4, sticky="nsew")
-        elif section == "history":
-            self._history_view.grid(row=0, column=4, sticky="nsew")
-            self._refresh_history_view()
-        elif section == "about":
-            self._show_about()
-            self._output.grid(row=0, column=4, sticky="nsew")
-            self._sidebar.set_active("generate")
-
-    def _toggle_terminal(self):
-        self._terminal._toggle()
-
-    # ── Settings callback ──────────────────────────────────────────────────────
-
-    def _on_settings_change(self, new_config: dict):
-        self._config.update(new_config)
-        self._controls.set_output_dir(
-            new_config.get("output_dir", self._controls._output_dir)
-        )
-
-    def _on_output_folder_change(self, folder: str):
-        self._config["output_dir"] = folder
-        save_config(self._config)
-
     # ── Model management ───────────────────────────────────────────────────────
 
     def _check_model(self):
-        """Load or prompt to download the configured model."""
-        model_name = self._config.get("selected_model", "XTTS v2 — Multilingual Pro")
+        model_name = self._config.get("selected_model", "VCTK VITS — Fast English (Default)")
         spec = MODEL_CATALOG.get(model_name, {})
         from core.model_manager import is_model_downloaded
         if is_model_downloaded(spec.get("model_id", "")):
             self._load_model_bg(model_name)
         else:
-            # Prompt to run wizard / download
             if messagebox.askyesno(
                 "Model Not Downloaded",
                 f"The model '{model_name}' is not downloaded.\n\n"
-                "Download it now? (~" + str(spec.get("size_gb", 0)) + " GB)\n\n"
+                f"Download it now? (~{spec.get('size_gb', 0)} GB)\n\n"
                 "You can also change the model in Settings.",
             ):
                 self._download_model_bg(model_name, spec)
@@ -594,13 +443,11 @@ class AuraVoiceApp(ctk.CTk):
                 self._model_pill.configure(
                     text="  ⚠ No model  ",
                     text_color=WARNING,
+                    fg_color="transparent",
                 )
 
     def _load_model_bg(self, model_name: str = ""):
-        self._model_pill.configure(
-            text="  ◌ Loading…  ",
-            text_color=WARNING,
-        )
+        self._model_pill.configure(text="  ◌ Loading…  ", text_color=WARNING)
         self._terminal.write(f"[System] Loading model: {model_name}\n", "blue")
 
         def _load():
@@ -615,9 +462,11 @@ class AuraVoiceApp(ctk.CTk):
         threading.Thread(target=_load, daemon=True).start()
 
     def _download_model_bg(self, model_name: str, spec: Optional[dict] = None):
-        """Download model with progress shown in bottom bar."""
-        self._bar.start_generation(1)
-        self._bar._set_status(f"Downloading {model_name}…", TEXT_SUB)
+        size_gb = (spec or {}).get("size_gb", 0)
+        self._model_pill.configure(text="  ⬇ Downloading…  ", text_color=WARNING)
+        self._terminal.write(
+            f"[System] Downloading {model_name} (~{size_gb} GB)…\n", "blue"
+        )
 
         capture = _StderrCapture(self._q)
         sys.stderr = capture
@@ -645,12 +494,12 @@ class AuraVoiceApp(ctk.CTk):
             )
             return
 
-        script = self._controls.get_script_text()
+        script = self._main_view.get_script_text()
         if not script.strip():
             messagebox.showwarning("Empty Script", "Please enter a script first.")
             return
 
-        settings = self._controls.get_settings()
+        settings = self._main_view.get_settings()
 
         # Voice cloning: requires a reference audio file
         if settings["voice_profile"] == "Custom (Clone)":
@@ -659,12 +508,11 @@ class AuraVoiceApp(ctk.CTk):
                 messagebox.showwarning(
                     "No Reference Audio",
                     "Voice cloning requires a reference audio file.\n\n"
-                    "Go to the Advanced tab → Voice Profile → Custom (Clone) "
-                    "and click Browse to select a WAV or MP3 sample (5–30 seconds).",
+                    "Set a clone reference path in settings.",
                 )
                 return
             self._terminal.write(
-                f"[Generate] Voice clone mode — XTTS v2 will load on first use (~1.87 GB)\n",
+                "[Generate] Voice clone mode — XTTS v2 will load on first use (~1.87 GB)\n",
                 "blue",
             )
 
@@ -674,22 +522,25 @@ class AuraVoiceApp(ctk.CTk):
         total      = len(chunks)
         output_dir = Path(settings["output_dir"])
         output_dir.mkdir(parents=True, exist_ok=True)
-        ts          = datetime.now().strftime("%Y%m%d_%H%M%S")
+        ts         = datetime.now().strftime("%Y%m%d_%H%M%S")
         output_stem = output_dir / f"aura_voice_{ts}"
 
         self._cancel.clear()
-        self._bar.start_generation(total)
-        self._controls.set_generating(True)
-        self._output.show_generating_state("Synthesising audio…")
-        self._terminal.write(f"[Generate] Script: {len(script)} chars, {total} chunk(s)\n", "blue")
+        self._gen_total = total
+        self._gen_done  = 0
+        self._gen_start = __import__("time").time()
 
-        # Map voice profile to internal settings
+        self._main_view.set_generating(True)
+        self._terminal.write(
+            f"[Generate] Script: {len(script)} chars, {total} chunk(s)\n", "blue"
+        )
+
         ref_wav = (
             Path(settings["clone_ref_path"])
             if settings.get("clone_ref_path")
             else None
         )
-        lang_code = LANGUAGE_CODES.get(settings["language"], "en")
+        lang_code = LANGUAGE_CODES.get(settings.get("language", "English"), "en")
 
         def _run():
             self._engine.synthesise(
@@ -716,9 +567,7 @@ class AuraVoiceApp(ctk.CTk):
 
     def _cancel_synthesis(self):
         self._cancel.set()
-        self._bar.set_cancelled()
-        self._controls.set_generating(False)
-        self._output.stop_generating_state()
+        self._main_view.set_generating(False)
         self._terminal.write("[Generate] Cancelled by user.\n", "yellow")
 
     # ── Queue poll ─────────────────────────────────────────────────────────────
@@ -738,7 +587,7 @@ class AuraVoiceApp(ctk.CTk):
     def _handle(self, kind: str, payload):
         if kind == _Q_MODEL_STATUS:
             if payload == "__done__":
-                name = self._config.get("selected_model", "XTTS v2")
+                name  = self._config.get("selected_model", "VCTK VITS")
                 short = name.split("—")[0].strip()
                 self._model_pill.configure(
                     text=f"  ● {short}  ",
@@ -751,116 +600,69 @@ class AuraVoiceApp(ctk.CTk):
                 self._model_pill.configure(
                     text="  ● Error  ",
                     text_color=ERROR,
+                    fg_color="transparent",
                 )
                 self._terminal.write(f"[Model] Error: {err}\n", "red")
                 messagebox.showerror("Model Error", err)
             else:
                 self._model_pill.configure(
-                    text=f"  ◌ {payload[:30]}  ",
+                    text=f"  ◌ {payload[:28]}  ",
                     text_color=WARNING,
                 )
 
         elif kind == _Q_DL_PROGRESS:
             done, total = payload
             pct = (done / total * 100) if total > 0 else 0
-            self._bar.set_progress(pct, f"Downloading model… {pct:.0f}%")
+            self._model_pill.configure(
+                text=f"  ⬇ {pct:.0f}%  ",
+                text_color=WARNING,
+            )
 
         elif kind == _Q_CHUNK_START:
             c, t = payload
-            self._bar._set_status(f"Synthesising chunk {c} / {t}…", TEXT_SUB)
+            self._gen_done = c - 1
             self._terminal.write(f"  chunk {c}/{t}\n", "green")
 
         elif kind == _Q_CHUNK_DONE:
-            c, t, eta = payload
-            self._bar.update_chunk(c, t, eta)
+            c, t, _eta = payload
+            self._gen_done = c
+            del t, _eta  # consumed by engine; not displayed in this layout
 
         elif kind == _Q_STITCH_START:
-            self._bar.set_stitching()
             self._terminal.write("[Generate] Stitching audio…\n", "blue")
 
         elif kind == _Q_STITCH_PROG:
-            self._bar.set_stitch_progress(*payload)
+            pass  # no separate progress bar in new layout
 
         elif kind == _Q_EXPORT_START:
-            self._bar.set_exporting(payload)
             self._terminal.write(f"[Generate] Exporting {payload}…\n", "blue")
 
         elif kind == _Q_COMPLETE:
             path: Path = payload
             self._last_output = path
-            self._bar.set_complete(str(path.name))
-            self._controls.set_generating(False)
+            self._main_view.set_generating(False)
             self._terminal.write(f"[Generate] Done: {path}\n", "green")
-
-            # Generate thumbnail
-            self._generate_thumbnail_and_update(path)
+            self._finalize_output(path)
 
         elif kind == _Q_ERROR:
-            self._bar.set_error(payload)
-            self._controls.set_generating(False)
-            self._output.stop_generating_state()
+            self._main_view.set_generating(False)
             self._terminal.write(f"[Generate] Error: {payload}\n", "red")
             messagebox.showerror("Synthesis Error", payload)
 
-    # ── Thumbnail + output update ──────────────────────────────────────────────
+    # ── Output finalization ────────────────────────────────────────────────────
 
-    def _generate_thumbnail_and_update(self, audio_path: Path):
-        """Generate a thumbnail in background, then update the output panel."""
-        settings = self._controls.get_settings()
-        emotion  = settings.get("delivery_style", "Neutral")
-        profile  = settings.get("voice_profile", "Natural Female")
-
-        thumb_dir  = audio_path.parent / "thumbnails"
-        thumb_dir.mkdir(parents=True, exist_ok=True)
-        thumb_path = thumb_dir / (audio_path.stem + "_thumb.png")
-
-        script_preview = self._controls.get_script_text()
-        title = (script_preview[:40].strip() + "…") if len(script_preview) > 40 else script_preview.strip()
-        if not title:
-            title = audio_path.stem
-
+    def _finalize_output(self, audio_path: Path):
+        """Compute duration (in background) then call show_output on main thread."""
         def _bg():
-            try:
-                from core.thumbnail_generator import generate_thumbnail
-                generate_thumbnail(
-                    output_path=thumb_path,
-                    title=title,
-                    emotion=emotion,
-                    voice_profile=profile,
-                )
-            except Exception as exc:
-                print(f"[AppWindow] Thumbnail error: {exc}")
-            finally:
-                self.after(0, lambda: self._do_update_output(audio_path, thumb_path, title))
+            dur_str = self._get_duration_str(audio_path)
+            self.after(0, lambda: self._main_view.show_output(audio_path, dur_str))
+            # Auto-play if configured
+            if self._config.get("auto_play", False):
+                self.after(200, lambda: self._main_view._start_playback())
 
         threading.Thread(target=_bg, daemon=True).start()
 
-    def _do_update_output(self, audio_path: Path, thumb_path: Optional[Path], title: str):
-        """Update output panel on the main thread."""
-        self._output.stop_generating_state()
-
-        # Calculate duration
-        duration_str = self._get_duration_str(audio_path)
-        fmt = audio_path.suffix.lstrip(".").upper()
-
-        self._output.update_output(
-            audio_path=audio_path,
-            thumbnail_path=thumb_path,
-            title=title,
-            duration_str=duration_str,
-            format_label=fmt,
-        )
-
-        # Navigate to generate view to show result
-        if self._current_section != "generate":
-            self._navigate("generate")
-
-        # Auto-open folder if configured
-        if self._config.get("auto_open_folder", False):
-            self._open_folder()
-
     def _get_duration_str(self, audio_path: Path) -> str:
-        """Return a human-readable duration for an audio file."""
         try:
             from pydub import AudioSegment
             seg  = AudioSegment.from_file(str(audio_path))
@@ -874,16 +676,11 @@ class AuraVoiceApp(ctk.CTk):
     # ── File operations ────────────────────────────────────────────────────────
 
     def _new_project(self):
-        if messagebox.askyesno("New Project", "Discard the current script and settings?"):
-            # Clear script
-            try:
-                self._controls.script_box.delete("0.0", "end")
-                self._controls._placeholder_active = False
-                self._controls._update_word_count()
-            except Exception:
-                pass
+        if messagebox.askyesno("New Project", "Discard the current script?"):
+            self._main_view.load_script("")
+            self._main_view._placeholder_active = False
+            self._main_view._on_textarea_focus_out()
             self._project_path = None
-            self._bar.reset()
             self.title(self.WINDOW_TITLE)
 
     def _open_project(self):
@@ -901,12 +698,7 @@ class AuraVoiceApp(ctk.CTk):
             with open(p, "r", encoding="utf-8") as f:
                 data = json.load(f)
             if "script" in data:
-                self._controls.script_box.delete("0.0", "end")
-                self._controls.script_box.insert("0.0", data["script"])
-                self._controls._placeholder_active = False
-                self._controls._update_word_count()
-            if "settings" in data:
-                self._controls.load_settings(data["settings"])
+                self._main_view.load_script(data["script"])
             self._project_path = Path(p)
             self.title(f"{Path(p).stem}  —  {self.WINDOW_TITLE}")
         except Exception as exc:
@@ -931,7 +723,7 @@ class AuraVoiceApp(ctk.CTk):
         self.title(f"{Path(p).stem}  —  {self.WINDOW_TITLE}")
 
     def _do_save(self, path: Path):
-        script = self._controls.get_script_text()
+        script = self._main_view.get_script_text()
         if not script.strip():
             messagebox.showwarning("Empty", "Nothing to save — script is empty.")
             return
@@ -940,7 +732,7 @@ class AuraVoiceApp(ctk.CTk):
                 "format":   "auravoice_v2",
                 "version":  APP_VERSION,
                 "script":   script,
-                "settings": self._controls.get_settings(),
+                "settings": self._main_view.get_settings(),
             }
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2, default=str)
@@ -956,10 +748,7 @@ class AuraVoiceApp(ctk.CTk):
         if p:
             try:
                 content = Path(p).read_text(encoding="utf-8", errors="replace")
-                self._controls.script_box.delete("0.0", "end")
-                self._controls.script_box.insert("0.0", content)
-                self._controls._placeholder_active = False
-                self._controls._update_word_count()
+                self._main_view.load_script(content)
             except Exception as exc:
                 messagebox.showerror("Import Error", str(exc))
 
@@ -992,14 +781,13 @@ class AuraVoiceApp(ctk.CTk):
         folder = (
             self._last_output.parent
             if self._last_output
-            else Path(self._controls._output_dir)
+            else Path(self._main_view._output_dir)
         )
+        _plat = sys.platform
         try:
-            platform = sys.platform
-            if platform == "darwin":
+            if _plat == "darwin":
                 subprocess.call(["open", str(folder)])
-            elif platform == "win32":
-                # Use getattr to avoid static-analysis unreachability warnings
+            elif _plat == "win32":
                 getattr(os, "startfile")(str(folder))
             else:
                 subprocess.call(["xdg-open", str(folder)])
@@ -1008,190 +796,91 @@ class AuraVoiceApp(ctk.CTk):
 
     # ── Misc ───────────────────────────────────────────────────────────────────
 
+    def _toggle_terminal(self):
+        self._terminal._toggle()
+
     def _toggle_theme(self):
         mode = ctk.get_appearance_mode()
         ctk.set_appearance_mode("light" if mode == "Dark" else "dark")
 
+    def _check_cache_info(self):
+        from core.model_manager import get_model_cache_path
+        lines = []
+        for name, spec in MODEL_CATALOG.items():
+            path  = get_model_cache_path(spec["model_id"])
+            dl    = path.exists()
+            size  = ""
+            if dl:
+                try:
+                    total = sum(f.stat().st_size for f in path.rglob("*") if f.is_file())
+                    size  = f" ({total / 1e9:.2f} GB on disk)"
+                except Exception:
+                    pass
+            lines.append(f"{'✓' if dl else '○'} {name}{size}")
+        messagebox.showinfo("Model Cache", "\n".join(lines))
+
     def _show_about(self):
-        import platform, sys as _sys
+        import platform
         win = ctk.CTkToplevel(self)
         win.title("About AURA VOICE")
-        win.geometry("480x560")
+        win.geometry("460x420")
         win.resizable(False, False)
-        win.configure(fg_color="#0a0a0f")
+        win.configure(fg_color=BG_DEEP)
         win.grab_set()
         win.focus_set()
 
-        # ── Header bar ──────────────────────────────────────────────────────
-        hdr = ctk.CTkFrame(win, fg_color="#111118", corner_radius=0, height=72)
+        hdr = ctk.CTkFrame(win, fg_color=SURFACE, corner_radius=0, height=72)
         hdr.pack(fill="x")
         hdr.pack_propagate(False)
 
         ctk.CTkLabel(
-            hdr,
-            text="◈",
-            font=(FONTS["xl_bold"][0], 28),
-            text_color="#e2e8f0",
+            hdr, text="◈",
+            font=(FONTS["xl_bold"][0], 28), text_color=TEXT,
         ).pack(side="left", padx=(PAD["xl"], PAD["sm"]))
 
-        title_col = ctk.CTkFrame(hdr, fg_color="transparent")
-        title_col.pack(side="left", pady=12)
+        col = ctk.CTkFrame(hdr, fg_color="transparent")
+        col.pack(side="left", pady=12)
 
         ctk.CTkLabel(
-            title_col,
-            text="AURA VOICE",
-            font=(FONTS["2xl_bold"][0], 20, "bold"),
-            text_color="#f1f5f9",
-            anchor="w",
+            col, text=APP_NAME,
+            font=("Georgia", 18, "bold italic"), text_color=TEXT, anchor="w",
         ).pack(anchor="w")
 
         ctk.CTkLabel(
-            title_col,
-            text=APP_TAGLINE,
-            font=FONTS["xs"],
-            text_color="#475569",
-            anchor="w",
+            col, text=f"v{APP_VERSION}  ·  {APP_TAGLINE}",
+            font=FONTS["xs"], text_color=TEXT_DIM, anchor="w",
         ).pack(anchor="w")
 
-        # ── Version / build row ─────────────────────────────────────────────
-        ctk.CTkFrame(win, fg_color="#1e1e2e", height=1, corner_radius=0).pack(fill="x")
-        ver_row = ctk.CTkFrame(win, fg_color="#0d0d14", corner_radius=0, height=36)
-        ver_row.pack(fill="x")
-        ver_row.pack_propagate(False)
+        content = ctk.CTkFrame(win, fg_color="transparent")
+        content.pack(fill="both", expand=True, padx=PAD["xl"], pady=PAD["xl"])
 
-        ctk.CTkLabel(
-            ver_row,
-            text=f"  v{APP_VERSION}",
-            font=FONTS["mono_xs"],
-            text_color="#64748b",
-        ).pack(side="left", padx=4)
+        info_lines = [
+            f"Python  {sys.version.split()[0]}",
+            f"Platform  {platform.system()} {platform.machine()}",
+            f"Build  16 Mar 2026",
+        ]
+        for line in info_lines:
+            ctk.CTkLabel(
+                content, text=line,
+                font=FONTS["mono_xs"], text_color=TEXT_DIM, anchor="w",
+            ).pack(anchor="w", pady=1)
 
-        ctk.CTkLabel(
-            ver_row,
-            text="·  build 16 Mar 2026  ·  Python " + _sys.version.split()[0] + f"  ·  {platform.machine()}",
-            font=FONTS["mono_xs"],
-            text_color="#334155",
-        ).pack(side="left")
+        ctk.CTkFrame(content, fg_color=BORDER, height=1).pack(fill="x", pady=PAD["md"])
 
-        # ── Status strip ────────────────────────────────────────────────────
-        ctk.CTkFrame(win, fg_color="#1e1e2e", height=1, corner_radius=0).pack(fill="x")
-        status_row = ctk.CTkFrame(win, fg_color="#0a0a0f", corner_radius=0)
-        status_row.pack(fill="x", padx=PAD["xl"], pady=(PAD["md"], 0))
-
-        model_name  = self._config.get("selected_model", "VCTK VITS").split("—")[0].strip()
-        model_color = "#10b981" if self._engine.is_loaded else "#f59e0b"
-
-        for dot, label, color in [
-            ("●", "100% Offline",    "#10b981"),
-            ("●", "No API Keys",     "#10b981"),
-            ("●", "No Subscriptions","#10b981"),
-            ("●" if self._engine.is_loaded else "○", model_name, model_color),
+        for dot, label in [
+            ("●", "100% Offline"),
+            ("●", "No API Keys Required"),
+            ("●", "No Subscriptions"),
         ]:
-            row = ctk.CTkFrame(status_row, fg_color="transparent")
+            row = ctk.CTkFrame(content, fg_color="transparent")
             row.pack(anchor="w", pady=1)
-            ctk.CTkLabel(row, text=dot, font=FONTS["xs"], text_color=color, width=14).pack(side="left")
-            ctk.CTkLabel(row, text=label, font=FONTS["xs"], text_color="#94a3b8").pack(side="left", padx=(4,0))
-
-        # ── Separator ───────────────────────────────────────────────────────
-        ctk.CTkFrame(win, fg_color="#1e1e2e", height=1, corner_radius=0).pack(fill="x", pady=(PAD["md"], 0))
-
-        # ── Two-column tech stack ───────────────────────────────────────────
-        body = ctk.CTkFrame(win, fg_color="transparent")
-        body.pack(fill="x", padx=PAD["xl"], pady=(PAD["md"], 0))
-        body.columnconfigure(0, weight=1)
-        body.columnconfigure(1, weight=1)
-
-        ctk.CTkLabel(
-            body, text="COMPONENTS",
-            font=FONTS["xs_bold"], text_color="#334155",
-            anchor="w",
-        ).grid(row=0, column=0, sticky="w", pady=(0, PAD["xs"]))
-        ctk.CTkLabel(
-            body, text="SYSTEM",
-            font=FONTS["xs_bold"], text_color="#334155",
-            anchor="w",
-        ).grid(row=0, column=1, sticky="w", pady=(0, PAD["xs"]))
-
-        components = [
-            ("Coqui TTS",       "0.22.0"),
-            ("VCTK VITS",       "en · 109 voices"),
-            ("CustomTkinter",   "5.x"),
-            ("pydub",           "audio"),
-            ("PyTorch",         "2.6"),
-            ("pygame",          "2.6 · playback"),
-            ("Pillow",          "thumbnails"),
-            ("espeak-ng",       "phonemizer"),
-        ]
-        sys_info = [
-            ("Python",    _sys.version.split()[0]),
-            ("Platform",  platform.system()),
-            ("Arch",      platform.machine()),
-            ("OS",        platform.mac_ver()[0] if platform.system()=="Darwin" else platform.release()),
-            ("Processor", platform.processor()[:18] if platform.processor() else "—"),
-            ("Build",     "16 Mar 2026"),
-            ("Format",    ".avp / .wav / .mp3"),
-            ("License",   "MIT / Apache 2.0"),
-        ]
-
-        for i, ((cname, cver), (sname, sval)) in enumerate(zip(components, sys_info), start=1):
-            ctk.CTkLabel(
-                body, text=f"· {cname}",
-                font=FONTS["xs"], text_color="#94a3b8", anchor="w",
-            ).grid(row=i, column=0, sticky="w")
-            ctk.CTkLabel(
-                body, text=cver,
-                font=FONTS["mono_xs"], text_color="#475569", anchor="w",
-            ).grid(row=i, column=0, sticky="e", padx=(0, PAD["xl"]))
-
-            ctk.CTkLabel(
-                body, text=f"· {sname}",
-                font=FONTS["xs"], text_color="#94a3b8", anchor="w",
-            ).grid(row=i, column=1, sticky="w")
-            ctk.CTkLabel(
-                body, text=sval,
-                font=FONTS["mono_xs"], text_color="#475569", anchor="w",
-            ).grid(row=i, column=1, sticky="e")
-
-        # ── Footer ──────────────────────────────────────────────────────────
-        ctk.CTkFrame(win, fg_color="#1e1e2e", height=1, corner_radius=0).pack(fill="x", pady=(PAD["lg"], 0))
-
-        foot = ctk.CTkFrame(win, fg_color="#0d0d14", corner_radius=0)
-        foot.pack(fill="x", padx=PAD["xl"], pady=PAD["md"])
-
-        ctk.CTkLabel(
-            foot,
-            text="github.com/fireyhellmarketing-cmd/aura-voice",
-            font=FONTS["mono_xs"],
-            text_color="#334155",
-            cursor="hand2",
-        ).pack(side="left")
+            ctk.CTkLabel(row, text=dot, font=FONTS["xs"], text_color=SUCCESS, width=14).pack(side="left")
+            ctk.CTkLabel(row, text=label, font=FONTS["xs"], text_color=TEXT_SUB).pack(side="left", padx=(4, 0))
 
         ctk.CTkButton(
-            foot, text="Close",
-            width=72, height=28,
-            fg_color="#1e1e2e",
-            hover_color="#252540",
-            text_color="#94a3b8",
-            border_color="#252540",
-            border_width=1,
-            corner_radius=PAD["sm"],
-            font=FONTS["xs_bold"],
+            win, text="Close",
+            height=36, corner_radius=8,
+            fg_color=ACCENT, hover_color=ACCENT_HOV,
+            text_color="#FFFFFF", font=FONTS["sm_bold"],
             command=win.destroy,
-        ).pack(side="right")
-
-    def _check_cache_info(self):
-        from core.model_manager import is_model_downloaded, get_downloaded_size_gb
-        model_name = self._config.get("selected_model", "")
-        spec  = MODEL_CATALOG.get(model_name, {})
-        mid   = spec.get("model_id", "")
-        dl    = is_model_downloaded(mid)
-        sz    = get_downloaded_size_gb(mid) if dl else 0.0
-        loaded = self._engine.is_loaded
-        messagebox.showinfo(
-            "Model Cache",
-            f"Model: {model_name}\n"
-            f"Cached on disk: {'Yes' if dl else 'No'}\n"
-            f"Disk usage: {sz:.2f} GB\n"
-            f"Loaded in memory: {'Yes' if loaded else 'No'}\n\n"
-            f"Cache root: ~/.local/share/tts/",
-        )
+        ).pack(pady=(0, PAD["xl"]))

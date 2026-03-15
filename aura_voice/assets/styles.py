@@ -12,34 +12,47 @@ FORMAT_ID   = "auravoice_v2"
 
 # ─── Window Geometry ───────────────────────────────────────────────────────────
 WINDOW = {
-    "width":      1320,
-    "height":     860,
-    "min_width":  1100,
-    "min_height": 720,
+    "width":      900,
+    "height":     780,
+    "min_width":  760,
+    "min_height": 600,
 }
+
+# ─── New Design-System Colors (v3 redesign) ────────────────────────────────────
+BG_DEEP    = "#0A090F"    # near-black with violet undertone
+SURFACE    = "#110F1A"    # cards / inputs
+SURFACE2   = "#130F1E"    # slightly lighter surface
+ACCENT_HOV = "#9D5CF5"    # hover violet
+BORDER     = "#1E1B2E"    # subtle border
+BORDER2    = "#2A2540"    # slightly lighter border
+TEXT       = "#F1F5F9"    # primary text
+TEXT_SUB   = "#9D8FC4"    # secondary / muted
+TEXT_DIM   = "#6B6880"    # very muted labels
+TEXT_GHOST = "#3D3A52"    # placeholder / ghost
+ACCENT_DIM2 = "#5B21B6"   # darker violet for gradients (v3 name avoids clash)
 
 # ─── Color Palette ─────────────────────────────────────────────────────────────
 COLORS = {
     # Backgrounds
-    "bg":           "#0d0d12",
+    "bg":           "#0A090F",
     "sidebar":      "#111118",
-    "panel":        "#161620",
-    "card":         "#1e1e2c",
-    "card_hover":   "#252538",
-    "input_bg":     "#13131e",
+    "panel":        "#110F1A",
+    "card":         "#130F1E",
+    "card_hover":   "#1A1630",
+    "input_bg":     "#110F1A",
 
     # Accents
     "accent":           "#7c3aed",
-    "accent_hover":     "#9d5ef5",
-    "accent_dim":       "#3b1f6b",
+    "accent_hover":     "#9D5CF5",
+    "accent_dim":       "#5B21B6",
     "accent2":          "#f59e0b",
     "accent2_hover":    "#fbbf24",
 
     # Text
-    "text":         "#f1f5f9",
-    "text_sub":     "#94a3b8",
-    "text_muted":   "#475569",
-    "text_dim":     "#2d3748",
+    "text":         "#F1F5F9",
+    "text_sub":     "#9D8FC4",
+    "text_muted":   "#6B6880",
+    "text_dim":     "#3D3A52",
 
     # Semantic
     "success":      "#10b981",
@@ -50,14 +63,14 @@ COLORS = {
     "error_bg":     "#450a0a",
 
     # Borders
-    "border":       "#1e1e2e",
-    "border_light": "#252540",
+    "border":       "#1E1B2E",
+    "border_light": "#2A2540",
 
     # Components
-    "scrollbar":        "#1e1e2e",
-    "progress_track":   "#1e1e2c",
+    "scrollbar":        "#1E1B2E",
+    "progress_track":   "#1E1B2E",
     "progress_fill":    "#7c3aed",
-    "selection":        "#3b1f6b",
+    "selection":        "#5B21B6",
 }
 
 # Flat aliases for convenience
@@ -72,17 +85,13 @@ ACCENT_HOVER  = COLORS["accent_hover"]
 ACCENT_DIM    = COLORS["accent_dim"]
 ACCENT2       = COLORS["accent2"]
 ACCENT2_HOVER = COLORS["accent2_hover"]
-TEXT          = COLORS["text"]
-TEXT_SUB      = COLORS["text_sub"]
 TEXT_MUTED    = COLORS["text_muted"]
-TEXT_DIM      = COLORS["text_dim"]
 SUCCESS       = COLORS["success"]
 SUCCESS_BG    = COLORS["success_bg"]
 WARNING       = COLORS["warning"]
 WARNING_BG    = COLORS["warning_bg"]
 ERROR         = COLORS["error"]
 ERROR_BG      = COLORS["error_bg"]
-BORDER        = COLORS["border"]
 BORDER_LIGHT  = COLORS["border_light"]
 
 # ─── Typography ────────────────────────────────────────────────────────────────
