@@ -6,7 +6,7 @@ import platform as _platform
 
 # ─── App Identity ──────────────────────────────────────────────────────────────
 APP_NAME    = "AURA VOICE"
-APP_VERSION = "2.150326"
+APP_VERSION = "2.160326"
 APP_TAGLINE = "Your words. Your voice. Locally yours."
 FORMAT_ID   = "auravoice_v2"
 

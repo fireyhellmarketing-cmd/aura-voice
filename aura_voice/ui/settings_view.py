@@ -527,79 +527,87 @@ class SettingsView(ctk.CTkFrame):
     # ── About ──────────────────────────────────────────────────────────────────
 
     def _build_about_section(self):
+        import platform, sys as _sys
         sec = _AccordionSection(self._scroll, "About", expanded=False)
         sec.pack(fill="x", pady=(0, PAD["xl"]))
         c = sec.content
 
-        # Logo
-        ctk.CTkLabel(
-            c,
-            text="◈  AURA VOICE",
-            font=(FONTS["2xl_bold"][0], 28, "bold"),
-            text_color=ACCENT,
-        ).pack(pady=(PAD["xl"], 0))
+        # ── Header ──
+        hdr = ctk.CTkFrame(c, fg_color="#111118", corner_radius=RADIUS["md"])
+        hdr.pack(fill="x", padx=PAD["xl"], pady=(PAD["md"], PAD["xs"]))
+
+        name_row = ctk.CTkFrame(hdr, fg_color="transparent")
+        name_row.pack(fill="x", padx=PAD["md"], pady=(PAD["md"], PAD["xs"]))
 
         ctk.CTkLabel(
-            c,
-            text=f"Version {APP_VERSION}",
-            font=FONTS["base"],
-            text_color=TEXT_MUTED,
-        ).pack()
+            name_row, text="◈  AURA VOICE",
+            font=(FONTS["lg_bold"][0], 16, "bold"),
+            text_color="#e2e8f0",
+        ).pack(side="left")
 
         ctk.CTkLabel(
-            c,
-            text="Your words. Your voice. Locally yours.",
-            font=FONTS["base"],
-            text_color=TEXT_SUB,
-        ).pack(pady=(4, PAD["xl"]))
-
-        # Tech stack
-        stack_frame = ctk.CTkFrame(c, fg_color=CARD_HOVER, corner_radius=RADIUS["md"])
-        stack_frame.pack(fill="x", padx=PAD["xl"], pady=(0, PAD["md"]))
+            name_row, text=f"v{APP_VERSION}",
+            font=FONTS["mono_xs"],
+            text_color="#334155",
+        ).pack(side="right")
 
         ctk.CTkLabel(
-            stack_frame,
-            text="Tech Stack",
-            font=FONTS["sm_bold"],
-            text_color=TEXT,
-        ).pack(anchor="w", padx=PAD["md"], pady=(PAD["md"], PAD["sm"]))
+            hdr,
+            text=f"build 16 Mar 2026  ·  Python {_sys.version.split()[0]}  ·  {platform.system()} {platform.machine()}",
+            font=FONTS["mono_xs"],
+            text_color="#334155",
+            anchor="w",
+        ).pack(anchor="w", padx=PAD["md"], pady=(0, PAD["md"]))
 
-        tech = [
-            "Coqui TTS",
-            "XTTS v2",
-            "CustomTkinter",
-            "pydub",
-            "PyTorch",
-            "Pillow",
+        # ── Status dots ──
+        status_frame = ctk.CTkFrame(c, fg_color="transparent")
+        status_frame.pack(fill="x", padx=PAD["xl"], pady=(0, PAD["xs"]))
+
+        for dot, label, color in [
+            ("●", "100% Offline",     "#10b981"),
+            ("●", "No API Keys",      "#10b981"),
+            ("●", "No Subscriptions", "#10b981"),
+        ]:
+            row = ctk.CTkFrame(status_frame, fg_color="transparent")
+            row.pack(side="left", padx=(0, PAD["xl"]))
+            ctk.CTkLabel(row, text=dot, font=FONTS["xs"], text_color=color, width=12).pack(side="left")
+            ctk.CTkLabel(row, text=label, font=FONTS["xs"], text_color="#94a3b8").pack(side="left", padx=(3, 0))
+
+        # ── Components ──
+        stack = ctk.CTkFrame(c, fg_color="#0d0d14", corner_radius=RADIUS["md"])
+        stack.pack(fill="x", padx=PAD["xl"], pady=(PAD["xs"], PAD["xs"]))
+
+        ctk.CTkLabel(
+            stack, text="COMPONENTS",
+            font=FONTS["xs_bold"], text_color="#334155", anchor="w",
+        ).pack(anchor="w", padx=PAD["md"], pady=(PAD["sm"], 2))
+
+        components = [
+            ("Coqui TTS 0.22",  "Neural TTS engine"),
+            ("VCTK VITS",       "109 English speakers"),
+            ("CustomTkinter",   "Modern dark UI"),
+            ("pydub / pygame",  "Audio processing + playback"),
+            ("PyTorch 2.6",     "ML inference (MPS/CPU)"),
+            ("Pillow",          "Thumbnail generation"),
+            ("espeak-ng",       "Phonemizer backend"),
         ]
-        for t in tech:
-            ctk.CTkLabel(
-                stack_frame,
-                text=f"  ·  {t}",
-                font=FONTS["sm"],
-                text_color=TEXT_SUB,
-            ).pack(anchor="w", padx=PAD["md"])
+        for name, desc in components:
+            row = ctk.CTkFrame(stack, fg_color="transparent")
+            row.pack(fill="x", padx=PAD["md"], pady=1)
+            ctk.CTkLabel(row, text="·", font=FONTS["xs"], text_color="#334155", width=10).pack(side="left")
+            ctk.CTkLabel(row, text=name, font=FONTS["mono_xs"], text_color="#94a3b8").pack(side="left", padx=(4, 0))
+            ctk.CTkLabel(row, text=desc, font=FONTS["xs"], text_color="#475569").pack(side="right")
 
-        ctk.CTkFrame(stack_frame, fg_color="transparent", height=PAD["md"]).pack()
+        ctk.CTkFrame(stack, fg_color="transparent", height=6).pack()
 
-        # Privacy badge
+        # ── GitHub ──
         ctk.CTkLabel(
             c,
-            text="100% Offline  ·  No API Keys  ·  No Subscriptions",
-            font=FONTS["sm_bold"],
-            text_color=SUCCESS,
-            fg_color=SUCCESS_BG,
-            corner_radius=RADIUS["md"],
-        ).pack(padx=PAD["xl"], pady=(0, PAD["md"]), fill="x")
-
-        # GitHub link
-        ctk.CTkLabel(
-            c,
-            text="https://github.com/your-repo/aura-voice",
-            font=FONTS["mono_sm"],
-            text_color=ACCENT,
+            text="github.com/fireyhellmarketing-cmd/aura-voice",
+            font=FONTS["mono_xs"],
+            text_color="#334155",
             cursor="hand2",
-        ).pack(pady=(0, PAD["xl"]))
+        ).pack(pady=(PAD["xs"], PAD["md"]))
 
     # ── Helpers ────────────────────────────────────────────────────────────────
 

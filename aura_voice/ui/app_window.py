@@ -24,7 +24,6 @@ from assets.styles import (
     TEXT, TEXT_SUB, TEXT_MUTED,
     BORDER,
     SUCCESS, SUCCESS_BG, WARNING, ERROR,
-    btn_primary,
     apply_ctk_theme,
 )
 from core.model_manager import load_config, save_config, MODEL_CATALOG
@@ -1010,54 +1009,171 @@ class AuraVoiceApp(ctk.CTk):
         ctk.set_appearance_mode("light" if mode == "Dark" else "dark")
 
     def _show_about(self):
+        import platform, sys as _sys
         win = ctk.CTkToplevel(self)
         win.title("About AURA VOICE")
-        win.geometry("420x320")
+        win.geometry("480x560")
         win.resizable(False, False)
-        win.configure(fg_color=PANEL)
+        win.configure(fg_color="#0a0a0f")
         win.grab_set()
         win.focus_set()
 
-        ctk.CTkLabel(
-            win,
-            text="◈  AURA VOICE",
-            font=(FONTS["2xl_bold"][0], 28, "bold"),
-            text_color=ACCENT,
-        ).pack(pady=(PAD["4xl"], 0))
+        # ── Header bar ──────────────────────────────────────────────────────
+        hdr = ctk.CTkFrame(win, fg_color="#111118", corner_radius=0, height=72)
+        hdr.pack(fill="x")
+        hdr.pack_propagate(False)
 
         ctk.CTkLabel(
-            win,
-            text=f"Version {APP_VERSION}",
-            font=FONTS["base"],
-            text_color=TEXT_MUTED,
-        ).pack()
+            hdr,
+            text="◈",
+            font=(FONTS["xl_bold"][0], 28),
+            text_color="#e2e8f0",
+        ).pack(side="left", padx=(PAD["xl"], PAD["sm"]))
+
+        title_col = ctk.CTkFrame(hdr, fg_color="transparent")
+        title_col.pack(side="left", pady=12)
 
         ctk.CTkLabel(
-            win,
+            title_col,
+            text="AURA VOICE",
+            font=(FONTS["2xl_bold"][0], 20, "bold"),
+            text_color="#f1f5f9",
+            anchor="w",
+        ).pack(anchor="w")
+
+        ctk.CTkLabel(
+            title_col,
             text=APP_TAGLINE,
-            font=FONTS["base"],
-            text_color=TEXT_SUB,
-        ).pack(pady=4)
+            font=FONTS["xs"],
+            text_color="#475569",
+            anchor="w",
+        ).pack(anchor="w")
 
-        ctk.CTkFrame(win, height=1, fg_color=BORDER).pack(
-            fill="x", padx=PAD["4xl"], pady=PAD["xl"],
-        )
+        # ── Version / build row ─────────────────────────────────────────────
+        ctk.CTkFrame(win, fg_color="#1e1e2e", height=1, corner_radius=0).pack(fill="x")
+        ver_row = ctk.CTkFrame(win, fg_color="#0d0d14", corner_radius=0, height=36)
+        ver_row.pack(fill="x")
+        ver_row.pack_propagate(False)
 
         ctk.CTkLabel(
-            win,
-            text="Coqui TTS  ·  XTTS v2  ·  CustomTkinter  ·  pydub  ·  PyTorch\n\n"
-                 "100% Offline  ·  No API Keys  ·  No Subscriptions",
-            font=FONTS["base"],
-            text_color=TEXT_SUB,
-            justify="center",
-        ).pack()
+            ver_row,
+            text=f"  v{APP_VERSION}",
+            font=FONTS["mono_xs"],
+            text_color="#64748b",
+        ).pack(side="left", padx=4)
+
+        ctk.CTkLabel(
+            ver_row,
+            text="·  build 16 Mar 2026  ·  Python " + _sys.version.split()[0] + f"  ·  {platform.machine()}",
+            font=FONTS["mono_xs"],
+            text_color="#334155",
+        ).pack(side="left")
+
+        # ── Status strip ────────────────────────────────────────────────────
+        ctk.CTkFrame(win, fg_color="#1e1e2e", height=1, corner_radius=0).pack(fill="x")
+        status_row = ctk.CTkFrame(win, fg_color="#0a0a0f", corner_radius=0)
+        status_row.pack(fill="x", padx=PAD["xl"], pady=(PAD["md"], 0))
+
+        model_name  = self._config.get("selected_model", "VCTK VITS").split("—")[0].strip()
+        model_color = "#10b981" if self._engine.is_loaded else "#f59e0b"
+
+        for dot, label, color in [
+            ("●", "100% Offline",    "#10b981"),
+            ("●", "No API Keys",     "#10b981"),
+            ("●", "No Subscriptions","#10b981"),
+            ("●" if self._engine.is_loaded else "○", model_name, model_color),
+        ]:
+            row = ctk.CTkFrame(status_row, fg_color="transparent")
+            row.pack(anchor="w", pady=1)
+            ctk.CTkLabel(row, text=dot, font=FONTS["xs"], text_color=color, width=14).pack(side="left")
+            ctk.CTkLabel(row, text=label, font=FONTS["xs"], text_color="#94a3b8").pack(side="left", padx=(4,0))
+
+        # ── Separator ───────────────────────────────────────────────────────
+        ctk.CTkFrame(win, fg_color="#1e1e2e", height=1, corner_radius=0).pack(fill="x", pady=(PAD["md"], 0))
+
+        # ── Two-column tech stack ───────────────────────────────────────────
+        body = ctk.CTkFrame(win, fg_color="transparent")
+        body.pack(fill="x", padx=PAD["xl"], pady=(PAD["md"], 0))
+        body.columnconfigure(0, weight=1)
+        body.columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(
+            body, text="COMPONENTS",
+            font=FONTS["xs_bold"], text_color="#334155",
+            anchor="w",
+        ).grid(row=0, column=0, sticky="w", pady=(0, PAD["xs"]))
+        ctk.CTkLabel(
+            body, text="SYSTEM",
+            font=FONTS["xs_bold"], text_color="#334155",
+            anchor="w",
+        ).grid(row=0, column=1, sticky="w", pady=(0, PAD["xs"]))
+
+        components = [
+            ("Coqui TTS",       "0.22.0"),
+            ("VCTK VITS",       "en · 109 voices"),
+            ("CustomTkinter",   "5.x"),
+            ("pydub",           "audio"),
+            ("PyTorch",         "2.6"),
+            ("pygame",          "2.6 · playback"),
+            ("Pillow",          "thumbnails"),
+            ("espeak-ng",       "phonemizer"),
+        ]
+        sys_info = [
+            ("Python",    _sys.version.split()[0]),
+            ("Platform",  platform.system()),
+            ("Arch",      platform.machine()),
+            ("OS",        platform.mac_ver()[0] if platform.system()=="Darwin" else platform.release()),
+            ("Processor", platform.processor()[:18] if platform.processor() else "—"),
+            ("Build",     "16 Mar 2026"),
+            ("Format",    ".avp / .wav / .mp3"),
+            ("License",   "MIT / Apache 2.0"),
+        ]
+
+        for i, ((cname, cver), (sname, sval)) in enumerate(zip(components, sys_info), start=1):
+            ctk.CTkLabel(
+                body, text=f"· {cname}",
+                font=FONTS["xs"], text_color="#94a3b8", anchor="w",
+            ).grid(row=i, column=0, sticky="w")
+            ctk.CTkLabel(
+                body, text=cver,
+                font=FONTS["mono_xs"], text_color="#475569", anchor="w",
+            ).grid(row=i, column=0, sticky="e", padx=(0, PAD["xl"]))
+
+            ctk.CTkLabel(
+                body, text=f"· {sname}",
+                font=FONTS["xs"], text_color="#94a3b8", anchor="w",
+            ).grid(row=i, column=1, sticky="w")
+            ctk.CTkLabel(
+                body, text=sval,
+                font=FONTS["mono_xs"], text_color="#475569", anchor="w",
+            ).grid(row=i, column=1, sticky="e")
+
+        # ── Footer ──────────────────────────────────────────────────────────
+        ctk.CTkFrame(win, fg_color="#1e1e2e", height=1, corner_radius=0).pack(fill="x", pady=(PAD["lg"], 0))
+
+        foot = ctk.CTkFrame(win, fg_color="#0d0d14", corner_radius=0)
+        foot.pack(fill="x", padx=PAD["xl"], pady=PAD["md"])
+
+        ctk.CTkLabel(
+            foot,
+            text="github.com/fireyhellmarketing-cmd/aura-voice",
+            font=FONTS["mono_xs"],
+            text_color="#334155",
+            cursor="hand2",
+        ).pack(side="left")
 
         ctk.CTkButton(
-            win, text="Close",
-            width=90, height=34,
-            **btn_primary(),
+            foot, text="Close",
+            width=72, height=28,
+            fg_color="#1e1e2e",
+            hover_color="#252540",
+            text_color="#94a3b8",
+            border_color="#252540",
+            border_width=1,
+            corner_radius=PAD["sm"],
+            font=FONTS["xs_bold"],
             command=win.destroy,
-        ).pack(pady=PAD["xl"])
+        ).pack(side="right")
 
     def _check_cache_info(self):
         from core.model_manager import is_model_downloaded, get_downloaded_size_gb
