@@ -19,14 +19,14 @@ WINDOW = {
 }
 
 # ─── Design-System Colors (ChatGPT-style black & white) ────────────────────────
-BG_DEEP    = "#0D0D0D"   # near-black (ChatGPT sidebar bg)
-SURFACE    = "#1A1A1A"   # slightly lighter (ChatGPT input area)
-SURFACE2   = "#212121"   # card surfaces (ChatGPT message bg)
-SURFACE3   = "#2A2A2A"   # slightly lighter card (stats bar bg)
+BG_DEEP    = "#0A0A0A"   # obsidian black page bg
+SURFACE    = "#111111"   # sidebar, panels
+SURFACE2   = "#1A1A1A"   # card bg
+SURFACE3   = "#2A2A2A"   # elevated card (stats bar bg)
 ACCENT     = "#FFFFFF"   # white (buttons, active states)
 ACCENT_HOV = "#E5E5E5"   # slightly off-white on hover
-BORDER     = "#2D2D2D"   # subtle border
-BORDER2    = "#3D3D3D"   # slightly lighter border
+BORDER     = "#2A2A2A"   # subtle border
+BORDER2    = "#333333"   # slightly lighter border
 TEXT       = "#FFFFFF"   # primary text white
 TEXT_SUB   = "#ABABAB"   # secondary text (ChatGPT grey)
 TEXT_DIM   = "#6B6B6B"   # muted labels
@@ -42,7 +42,7 @@ ERROR_BG   = "#450A0A"
 COLORS = {
     # Backgrounds
     "bg":           BG_DEEP,
-    "sidebar":      "#111111",
+    "sidebar":      "#0D0D0D",
     "panel":        SURFACE,
     "card":         SURFACE2,
     "card_hover":   "#2A2A2A",

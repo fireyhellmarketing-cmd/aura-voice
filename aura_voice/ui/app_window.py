@@ -1,4 +1,4 @@
-"""AURA VOICE v3 — Main application window (centered single-column layout)."""
+"""AURA VOICE v4 — Main application window (bento-grid layout)."""
 
 from __future__ import annotations
 
@@ -18,12 +18,13 @@ import customtkinter as ctk
 
 from assets.styles import (
     APP_NAME, APP_VERSION, APP_TAGLINE,
-    FONTS, PAD, WINDOW,
-    BG_DEEP, SURFACE, SURFACE2, SURFACE3, BORDER, BORDER2,
+    FONTS, PAD,
+    BG_DEEP, SURFACE, BORDER, BORDER2,
     ACCENT, ACCENT_HOV,
     TEXT, TEXT_SUB, TEXT_DIM,
     ACCENT_DIM,
     SUCCESS, SUCCESS_BG, WARNING, ERROR,
+    RADIUS,
     apply_ctk_theme,
 )
 from core.model_manager import load_config, MODEL_CATALOG
@@ -56,7 +57,6 @@ class _StderrCapture:
 
     def __init__(self, ui_queue: queue.Queue):
         self._q    = ui_queue
-        # sys.__stderr__ is always a real stream; cast to satisfy type-checkers.
         import io
         self._real: io.TextIOBase = sys.__stderr__  # type: ignore[assignment]
 
@@ -84,25 +84,22 @@ class _StderrCapture:
 
 class AuraVoiceApp(ctk.CTk):
     """
-    AURA VOICE v3 main window — centered single-column layout.
+    AURA VOICE v4 main window — bento-grid layout.
 
-    ┌─────────────────────────────────────────────────────┐
-    │  TITLE BAR  (macOS controls · AURA VOICE · ⚙)       │
-    ├─────────────────────────────────────────────────────┤
-    │                                                     │
-    │          ┌───── centered column ─────┐             │
-    │          │  upload strip             │             │
-    │          │  textarea                 │             │
-    │          │  [voice] [speed] [emotion]│             │
-    │          │  [  Generate  ]           │             │
-    │          │  output card              │             │
-    │          └───────────────────────────┘             │
-    │                                                     │
-    ├─────────────────────────────────────────────────────┤
-    │  TERMINAL (collapsible)                             │
-    └─────────────────────────────────────────────────────┘
-
-    Settings sheet slides in from the right when the gear icon is clicked.
+    ┌──────────────────────────────────────────────────────────────────────┐
+    │  TITLE BAR  [● VCTK VITS]  AURA VOICE  [⚙]                          │
+    ├──────┬───────────────────────────────────────────┬───────────────────┤
+    │      │  TEXT EDITOR (fills, no centering)        │  VOICE CONTROLS   │
+    │  S   │  Upload strip                             │  Voice Profile    │
+    │  I   │  Textarea                                 │  Speed Slider     │
+    │  D   │  [  GENERATE  ]                           │  Delivery Style   │
+    │  E   │  [progress]                               │  Output Format    │
+    │  B   │  [output card]                            │  Output Folder    │
+    │  A   │                                           │  Clone Ref        │
+    │  R   │                                           │                   │
+    ├──────┴───────────────────────────────────────────┴───────────────────┤
+    │  DIAGNOSTICS  │  TERMINAL                        │  PLAYER + HISTORY │
+    └───────────────┴──────────────────────────────────┴───────────────────┘
     """
 
     WINDOW_TITLE = f"{APP_NAME} v{APP_VERSION}"
@@ -133,8 +130,8 @@ class AuraVoiceApp(ctk.CTk):
 
         # ── Window ──
         self.title(self.WINDOW_TITLE)
-        self.geometry(f"{WINDOW['width']}x{WINDOW['height']}")
-        self.minsize(WINDOW['min_width'], WINDOW['min_height'])
+        self.geometry("1100x720")
+        self.minsize(900, 560)
         self.resizable(True, True)
         self.configure(fg_color=BG_DEEP)
 
@@ -159,13 +156,13 @@ class AuraVoiceApp(ctk.CTk):
 
         f = _m("File")
         f.add_command(label="New Project",           command=self._new_project,    accelerator="Cmd+N")
-        f.add_command(label="Open Project…",         command=self._open_project,   accelerator="Cmd+O")
+        f.add_command(label="Open Project...",       command=self._open_project,   accelerator="Cmd+O")
         f.add_command(label="Save Project",          command=self._save_project,   accelerator="Cmd+S")
-        f.add_command(label="Save Project As…",      command=self._save_project_as)
+        f.add_command(label="Save Project As...",    command=self._save_project_as)
         f.add_separator()
-        f.add_command(label="Import Script (.txt)…", command=self._import_txt)
-        f.add_command(label="Export as WAV…",        command=lambda: self._export("wav"))
-        f.add_command(label="Export as MP3…",        command=lambda: self._export("mp3"))
+        f.add_command(label="Import Script (.txt)...", command=self._import_txt)
+        f.add_command(label="Export as WAV...",        command=lambda: self._export("wav"))
+        f.add_command(label="Export as MP3...",        command=lambda: self._export("mp3"))
         f.add_separator()
         f.add_command(label="Quit",                  command=self.quit, accelerator="Cmd+Q")
 
@@ -189,48 +186,52 @@ class AuraVoiceApp(ctk.CTk):
     # ── Layout ─────────────────────────────────────────────────────────────────
 
     def _build_ui(self):
-        self.rowconfigure(0, weight=0)  # title bar
-        self.rowconfigure(1, weight=1)  # body
-        self.rowconfigure(2, weight=0)  # stats bar
-        self.rowconfigure(3, weight=0)  # terminal
+        # 3 rows: titlebar | body | bottom bento
+        self.rowconfigure(0, weight=0)   # title bar
+        self.rowconfigure(1, weight=1)   # body
+        self.rowconfigure(2, weight=0)   # bottom bento (fixed height 140px)
         self.columnconfigure(0, weight=1)
 
-        # Title bar
-        self._build_titlebar()
+        self._build_titlebar()     # row=0
 
-        # Body — holds main view
+        # Body: sidebar | content | voice panel
         body = ctk.CTkFrame(self, fg_color=BG_DEEP, corner_radius=0)
         body.grid(row=1, column=0, sticky="nsew")
         body.rowconfigure(0, weight=1)
-        body.columnconfigure(0, weight=1)
+        body.columnconfigure(0, weight=0)   # sidebar (58px)
+        body.columnconfigure(1, weight=1)   # content
+        body.columnconfigure(2, weight=0)   # voice panel (260px)
 
-        # Main centered view
+        # Sidebar
+        from ui.sidebar import Sidebar
+        self._sidebar = Sidebar(body, on_nav=self._on_sidebar_nav)
+        self._sidebar.grid(row=0, column=0, sticky="ns")
+
+        # Content (MainView without centering)
         self._main_view = MainView(body)
-        self._main_view.grid(row=0, column=0, sticky="nsew")
+        self._main_view.grid(row=0, column=1, sticky="nsew")
         self._main_view.on_generate = self._start_synthesis
-        self._main_view.set_output_dir(
+
+        # Voice panel
+        from ui.voice_panel import VoicePanel
+        self._voice_panel = VoicePanel(body)
+        self._voice_panel.grid(row=0, column=2, sticky="ns")
+
+        # Set initial config values
+        self._voice_panel.set_output_dir(
             self._config.get("output_dir", str(Path.home() / "Documents" / "AuraVoice"))
         )
-        self._main_view.set_output_format(
+        self._voice_panel.set_output_format(
             self._config.get("output_format", "WAV")
         )
 
-        # Stats bar (row 2) — CPU / RAM / Model
-        self._build_stats_bar()
+        # Bottom bento row (3 cells)
+        self._build_bottom_bento()
 
-        # Terminal (collapsible, row 3)
-        self._terminal = TerminalWidget(
-            self,
-            cwd=str(Path(__file__).resolve().parent.parent),
-        )
-        self._terminal.grid(row=3, column=0, sticky="ew")
-
-        # Settings sheet (placed over body, starts off-screen)
+        # Settings sheet
         self._settings_sheet = SettingsSheet(
-            self,
-            config=self._config,
-            on_close=None,
-            on_config_change=self._on_settings_change,
+            self, config=self._config,
+            on_close=None, on_config_change=self._on_settings_change,
         )
 
     def _build_titlebar(self):
@@ -245,14 +246,14 @@ class AuraVoiceApp(ctk.CTk):
         left_pad = ctk.CTkFrame(tbar, fg_color="transparent", width=80)
         left_pad.grid(row=0, column=0, sticky="w")
 
-        # ── Center: brand name ──
+        # Center: brand name
         brand = ctk.CTkFrame(tbar, fg_color="transparent")
         brand.grid(row=0, column=1)
 
         # Model status pill (left of title)
         self._model_pill = ctk.CTkLabel(
             brand,
-            text="  ◌ Loading…  ",
+            text="  Loading...  ",
             font=FONTS["xs"],
             text_color=WARNING,
             fg_color=SURFACE,
@@ -260,7 +261,7 @@ class AuraVoiceApp(ctk.CTk):
         )
         self._model_pill.pack(side="left", padx=(0, PAD["md"]))
 
-        # App name — Georgia italic (CTk font tuples only support a single style keyword)
+        # App name
         ctk.CTkLabel(
             brand,
             text=APP_NAME,
@@ -268,7 +269,7 @@ class AuraVoiceApp(ctk.CTk):
             text_color=TEXT,
         ).pack(side="left")
 
-        # ── Right: gear icon button ──
+        # Right: gear icon button
         right_area = ctk.CTkFrame(tbar, fg_color="transparent")
         right_area.grid(row=0, column=2, sticky="e", padx=(0, PAD["xl"]))
 
@@ -285,26 +286,128 @@ class AuraVoiceApp(ctk.CTk):
         )
         self._gear_btn.pack(side="right")
 
-        # Bind hover to change color
         self._gear_btn.bind("<Enter>", lambda *_: self._gear_btn.configure(text_color=ACCENT_HOV))
         self._gear_btn.bind("<Leave>", lambda *_: self._gear_btn.configure(text_color=TEXT_DIM))
 
-    # ── Stats bar ──────────────────────────────────────────────────────────────
+    def _build_bottom_bento(self):
+        bento = ctk.CTkFrame(self, fg_color=SURFACE, corner_radius=0,
+                              border_color=BORDER, border_width=1)
+        bento.grid(row=2, column=0, sticky="ew")
+        bento.configure(height=140)
+        bento.grid_propagate(False)
+        bento.rowconfigure(0, weight=1)
+        bento.columnconfigure(0, weight=0)   # diagnostics ~180px
+        bento.columnconfigure(1, weight=1)   # terminal
+        bento.columnconfigure(2, weight=0)   # player ~240px
 
-    def _build_stats_bar(self):
-        bar = ctk.CTkFrame(self, fg_color=SURFACE3, corner_radius=0, height=24)
-        bar.grid(row=2, column=0, sticky="ew")
-        bar.grid_propagate(False)
-        bar.columnconfigure(0, weight=1)
+        # Cell 0: Diagnostics
+        diag = ctk.CTkFrame(bento, fg_color=BG_DEEP, corner_radius=0,
+                             border_color=BORDER, border_width=1, width=180)
+        diag.grid(row=0, column=0, sticky="nsew")
+        diag.grid_propagate(False)
 
-        self._stats_label = ctk.CTkLabel(
-            bar,
-            text="CPU: —   RAM: —   Model: —",
-            font=FONTS["mono_xs"],
-            text_color=TEXT_DIM,
-            anchor="center",
+        ctk.CTkLabel(diag, text="DIAGNOSTICS", font=FONTS["xs_bold"],
+                      text_color=TEXT_DIM).pack(anchor="w", padx=10, pady=(8, 4))
+
+        self._diag_cpu_lbl = ctk.CTkLabel(diag, text="CPU  --",
+            font=FONTS["mono_xs"], text_color=TEXT_SUB, anchor="w")
+        self._diag_cpu_lbl.pack(anchor="w", padx=10)
+
+        self._diag_ram_lbl = ctk.CTkLabel(diag, text="RAM  --",
+            font=FONTS["mono_xs"], text_color=TEXT_SUB, anchor="w")
+        self._diag_ram_lbl.pack(anchor="w", padx=10)
+
+        self._diag_mdl_lbl = ctk.CTkLabel(diag, text="Model  --",
+            font=FONTS["mono_xs"], text_color=TEXT_DIM, anchor="w",
+            wraplength=160)
+        self._diag_mdl_lbl.pack(anchor="w", padx=10, pady=(4, 0))
+
+        # Cell 1: Terminal
+        self._terminal = TerminalWidget(
+            bento, cwd=str(Path(__file__).resolve().parent.parent)
         )
-        self._stats_label.grid(row=0, column=0, sticky="ew", padx=PAD["md"])
+        self._terminal.grid(row=0, column=1, sticky="nsew")
+
+        # Cell 2: Player + History
+        player_cell = ctk.CTkFrame(bento, fg_color=BG_DEEP, corner_radius=0,
+                                    border_color=BORDER, border_width=1, width=240)
+        player_cell.grid(row=0, column=2, sticky="nsew")
+        player_cell.grid_propagate(False)
+
+        ctk.CTkLabel(player_cell, text="OUTPUT", font=FONTS["xs_bold"],
+                      text_color=TEXT_DIM).pack(anchor="w", padx=10, pady=(8, 4))
+
+        ctrl_row = ctk.CTkFrame(player_cell, fg_color="transparent")
+        ctrl_row.pack(fill="x", padx=10, pady=(0, 6))
+
+        self._bento_play_btn = ctk.CTkButton(
+            ctrl_row, text="▶", width=36, height=36,
+            fg_color=ACCENT, hover_color="#E5E5E5", text_color="#000000",
+            corner_radius=18, font=FONTS["md"],
+            command=self._bento_play,
+        )
+        self._bento_play_btn.pack(side="left", padx=(0, 4))
+
+        ctk.CTkButton(
+            ctrl_row, text="■", width=32, height=36,
+            fg_color=SURFACE, hover_color=BORDER2, text_color=TEXT_SUB,
+            corner_radius=8, font=FONTS["base"],
+            command=self._bento_stop,
+        ).pack(side="left", padx=(0, 4))
+
+        ctk.CTkButton(
+            ctrl_row, text="↓", width=32, height=36,
+            fg_color=SURFACE, hover_color=BORDER2, text_color=TEXT_SUB,
+            corner_radius=8, font=FONTS["base"],
+            command=lambda: self._main_view._do_download(),
+        ).pack(side="left", padx=(0, 4))
+
+        ctk.CTkButton(
+            ctrl_row, text="📂", width=32, height=36,
+            fg_color=SURFACE, hover_color=BORDER2, text_color=TEXT_SUB,
+            corner_radius=8, font=FONTS["base"],
+            command=lambda: self._main_view._do_open_folder(),
+        ).pack(side="left")
+
+        self._bento_progress = ctk.CTkProgressBar(
+            player_cell, height=4, fg_color=BORDER2,
+            progress_color=ACCENT, corner_radius=2,
+        )
+        self._bento_progress.set(0)
+        self._bento_progress.pack(fill="x", padx=10, pady=(0, 4))
+
+        self._bento_file_lbl = ctk.CTkLabel(
+            player_cell, text="No output yet",
+            font=FONTS["xs"], text_color=TEXT_DIM, anchor="w",
+        )
+        self._bento_file_lbl.pack(anchor="w", padx=10)
+
+        ctk.CTkButton(
+            player_cell, text="History >",
+            height=28, fg_color=SURFACE, hover_color=BORDER2,
+            text_color=TEXT_SUB, corner_radius=RADIUS["md"],
+            font=FONTS["xs_bold"],
+            command=self._show_history,
+        ).pack(fill="x", padx=10, pady=(4, 8))
+
+    # ── Bento player helpers ────────────────────────────────────────────────────
+
+    def _bento_play(self):
+        self._main_view._toggle_play()
+
+    def _bento_stop(self):
+        self._main_view._stop_playback()
+
+    def _on_sidebar_nav(self, section: str):
+        if section == "settings":
+            self._toggle_settings()
+        elif section == "history":
+            self._show_history()
+        elif section == "about":
+            self._show_about()
+        # "generate" just keeps focus on main content
+
+    # ── Stats bar ──────────────────────────────────────────────────────────────
 
     def _start_stats_poll(self):
         self._update_stats_bar()
@@ -313,24 +416,16 @@ class AuraVoiceApp(ctk.CTk):
         try:
             import psutil
             cpu = psutil.cpu_percent(interval=None)
-            ram_bytes = psutil.virtual_memory().used
-            ram_gb = ram_bytes / (1024 ** 3)
-            cpu_str = f"CPU: {cpu:.0f}%"
-            ram_str = f"RAM: {ram_gb:.1f} GB"
-        except Exception:
-            cpu_str = "CPU: —"
-            ram_str = "RAM: —"
+            ram_gb = psutil.virtual_memory().used / 1e9
+            name = self._config.get("selected_model", "VCTK VITS").split("--")[0].strip()
 
-        model_name = self._config.get("selected_model", "—")
-        short_model = model_name.split("—")[0].strip()
-
-        try:
-            self._stats_label.configure(
-                text=f"{cpu_str}   {ram_str}   Model: {short_model}"
-            )
+            # Update bento diagnostics
+            if hasattr(self, "_diag_cpu_lbl"):
+                self._diag_cpu_lbl.configure(text=f"CPU  {cpu:.0f}%")
+                self._diag_ram_lbl.configure(text=f"RAM  {ram_gb:.1f} GB")
+                self._diag_mdl_lbl.configure(text=f"{name}")
         except Exception:
             pass
-
         self.after(3000, self._update_stats_bar)
 
     # ── Settings sheet ─────────────────────────────────────────────────────────
@@ -345,8 +440,10 @@ class AuraVoiceApp(ctk.CTk):
         self._config.update(new_config)
         if "output_dir" in new_config:
             self._main_view.set_output_dir(new_config["output_dir"])
+            self._voice_panel.set_output_dir(new_config["output_dir"])
         if "output_format" in new_config:
             self._main_view.set_output_format(new_config["output_format"])
+            self._voice_panel.set_output_format(new_config["output_format"])
 
     # ── History overlay ────────────────────────────────────────────────────────
 
@@ -405,7 +502,7 @@ class AuraVoiceApp(ctk.CTk):
             info = ctk.CTkFrame(row, fg_color="transparent")
             info.pack(side="left", fill="both", expand=True, padx=PAD["card"], pady=PAD["card"])
 
-            title = rec.title[:55] + ("…" if len(rec.title) > 55 else "")
+            title = rec.title[:55] + ("..." if len(rec.title) > 55 else "")
             ctk.CTkLabel(info, text=title, font=FONTS["sm_bold"], text_color=TEXT, anchor="w").pack(anchor="w")
             ctk.CTkLabel(info, text=rec.audio_path.name, font=FONTS["mono_xs"], text_color=TEXT_DIM, anchor="w").pack(anchor="w")
 
@@ -491,13 +588,13 @@ class AuraVoiceApp(ctk.CTk):
                 self._download_model_bg(model_name, spec)
             else:
                 self._model_pill.configure(
-                    text="  ⚠ No model  ",
+                    text="  No model  ",
                     text_color=WARNING,
                     fg_color="transparent",
                 )
 
     def _load_model_bg(self, model_name: str = ""):
-        self._model_pill.configure(text="  ◌ Loading…  ", text_color=WARNING)
+        self._model_pill.configure(text="  Loading...  ", text_color=WARNING)
         self._terminal.write(f"[System] Loading model: {model_name}\n", "blue")
 
         def _load():
@@ -513,9 +610,9 @@ class AuraVoiceApp(ctk.CTk):
 
     def _download_model_bg(self, model_name: str, spec: Optional[dict] = None):
         size_gb = (spec or {}).get("size_gb", 0)
-        self._model_pill.configure(text="  ⬇ Downloading…  ", text_color=WARNING)
+        self._model_pill.configure(text="  Downloading...  ", text_color=WARNING)
         self._terminal.write(
-            f"[System] Downloading {model_name} (~{size_gb} GB)…\n", "blue"
+            f"[System] Downloading {model_name} (~{size_gb} GB)...\n", "blue"
         )
 
         capture = _StderrCapture(self._q)
@@ -549,7 +646,10 @@ class AuraVoiceApp(ctk.CTk):
             messagebox.showwarning("Empty Script", "Please enter a script first.")
             return
 
-        settings = self._main_view.get_settings()
+        # Merge settings from both panels
+        content_settings = self._main_view.get_settings()   # output_dir, format, clone_ref
+        voice_settings   = self._voice_panel.get_settings()  # voice, speed, emotion, etc.
+        settings = {**content_settings, **voice_settings}    # voice_settings wins on overlap
 
         # Voice cloning: requires a reference audio file
         if settings["voice_profile"] == "Custom (Clone)":
@@ -558,7 +658,7 @@ class AuraVoiceApp(ctk.CTk):
                 messagebox.showwarning(
                     "No Reference Audio",
                     "Voice cloning requires a reference audio file.\n\n"
-                    "Set a clone reference path in settings.",
+                    "Set a clone reference path in the Voice panel.",
                 )
                 return
             self._terminal.write(
@@ -638,7 +738,7 @@ class AuraVoiceApp(ctk.CTk):
         if kind == _Q_MODEL_STATUS:
             if payload == "__done__":
                 name  = self._config.get("selected_model", "VCTK VITS")
-                short = name.split("—")[0].strip()
+                short = name.split("--")[0].strip()
                 self._model_pill.configure(
                     text=f"  ● {short}  ",
                     text_color=SUCCESS,
@@ -656,7 +756,7 @@ class AuraVoiceApp(ctk.CTk):
                 messagebox.showerror("Model Error", err)
             else:
                 self._model_pill.configure(
-                    text=f"  ◌ {payload[:28]}  ",
+                    text=f"  {payload[:28]}  ",
                     text_color=WARNING,
                 )
 
@@ -664,7 +764,7 @@ class AuraVoiceApp(ctk.CTk):
             done, total = payload
             pct = (done / total * 100) if total > 0 else 0
             self._model_pill.configure(
-                text=f"  ⬇ {pct:.0f}%  ",
+                text=f"  {pct:.0f}%  ",
                 text_color=WARNING,
             )
 
@@ -680,13 +780,13 @@ class AuraVoiceApp(ctk.CTk):
             self._main_view.update_chunk_progress(c, t, eta)
 
         elif kind == _Q_STITCH_START:
-            self._terminal.write("[Generate] Stitching audio…\n", "blue")
+            self._terminal.write("[Generate] Stitching audio...\n", "blue")
 
         elif kind == _Q_STITCH_PROG:
-            pass  # no separate progress bar in new layout
+            pass  # no separate progress bar in bento layout
 
         elif kind == _Q_EXPORT_START:
-            self._terminal.write(f"[Generate] Exporting {payload}…\n", "blue")
+            self._terminal.write(f"[Generate] Exporting {payload}...\n", "blue")
 
         elif kind == _Q_COMPLETE:
             path: Path = payload
@@ -707,7 +807,9 @@ class AuraVoiceApp(ctk.CTk):
         def _bg():
             dur_str = self._get_duration_str(audio_path)
             self.after(0, lambda: self._main_view.show_output(audio_path, dur_str))
-            # Auto-play if configured
+            self.after(0, lambda: self._bento_file_lbl.configure(
+                text=audio_path.name[:32] + ("..." if len(audio_path.name) > 32 else "")
+            ))
             if self._config.get("auto_play", False):
                 self.after(200, lambda: self._main_view._start_playback())
 
@@ -722,7 +824,7 @@ class AuraVoiceApp(ctk.CTk):
             mins, s = divmod(secs, 60)
             return f"{mins}m {s}s" if mins else f"{s}s"
         except Exception:
-            return "—"
+            return "--"
 
     # ── File operations ────────────────────────────────────────────────────────
 
@@ -751,7 +853,7 @@ class AuraVoiceApp(ctk.CTk):
             if "script" in data:
                 self._main_view.load_script(data["script"])
             self._project_path = Path(p)
-            self.title(f"{Path(p).stem}  —  {self.WINDOW_TITLE}")
+            self.title(f"{Path(p).stem}  --  {self.WINDOW_TITLE}")
         except Exception as exc:
             messagebox.showerror("Open Error", str(exc))
 
@@ -771,7 +873,7 @@ class AuraVoiceApp(ctk.CTk):
             return
         self._project_path = Path(p)
         self._do_save(self._project_path)
-        self.title(f"{Path(p).stem}  —  {self.WINDOW_TITLE}")
+        self.title(f"{Path(p).stem}  --  {self.WINDOW_TITLE}")
 
     def _do_save(self, path: Path):
         script = self._main_view.get_script_text()
@@ -779,11 +881,15 @@ class AuraVoiceApp(ctk.CTk):
             messagebox.showwarning("Empty", "Nothing to save — script is empty.")
             return
         try:
+            # Merge settings from both panels for saving
+            content_settings = self._main_view.get_settings()
+            voice_settings   = self._voice_panel.get_settings()
+            merged_settings  = {**content_settings, **voice_settings}
             data = {
                 "format":   "auravoice_v2",
                 "version":  APP_VERSION,
                 "script":   script,
-                "settings": self._main_view.get_settings(),
+                "settings": merged_settings,
             }
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2, default=str)
@@ -867,7 +973,7 @@ class AuraVoiceApp(ctk.CTk):
                     size  = f" ({total / 1e9:.2f} GB on disk)"
                 except Exception:
                     pass
-            lines.append(f"{'✓' if dl else '○'} {name}{size}")
+            lines.append(f"{'v' if dl else 'o'} {name}{size}")
         messagebox.showinfo("Model Cache", "\n".join(lines))
 
     def _show_about(self):
