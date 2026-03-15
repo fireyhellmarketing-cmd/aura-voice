@@ -1,10 +1,14 @@
-"""AURA VOICE — Right-side voice controls panel."""
+"""AURA VOICE — Right-side voice controls panel (detailed voice settings)."""
+
 from __future__ import annotations
+
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog
 from typing import Optional
+
 import customtkinter as ctk
+
 from assets.styles import (
     SURFACE, SURFACE2, SURFACE3, BORDER, BORDER2,
     TEXT, TEXT_SUB, TEXT_DIM,
@@ -14,10 +18,92 @@ from assets.styles import (
 from core.tts_engine import VOICE_PROFILES, EMOTION_SPEEDS, LANGUAGE_CODES
 
 DELIVERY_STYLES = list(EMOTION_SPEEDS.keys())
-VOICE_NAMES = list(VOICE_PROFILES.keys())
+VOICE_NAMES     = list(VOICE_PROFILES.keys())
+
+# Emotion dot positions on the 2D grid (label, x 0-1, y 0-1, color)
+_EMOTION_DOTS = [
+    ("Neutral",    0.50, 0.50, "#888888"),
+    ("Happy",      0.72, 0.20, "#F59E0B"),
+    ("Excited",    0.88, 0.12, "#EF4444"),
+    ("Calm",       0.25, 0.55, "#10B981"),
+    ("Sad",        0.20, 0.78, "#A855F7"),
+    ("Serious",    0.38, 0.30, "#3B82F6"),
+    ("Warm",       0.60, 0.35, "#F97316"),
+    ("Whisper",    0.15, 0.40, "#EC4899"),
+]
+
+
+class _EmotionGrid(tk.Canvas):
+    """2-D emotion blend grid — dots the user can click to pick a style."""
+
+    _DOT_R = 6
+
+    def __init__(self, parent, emotion_var: ctk.StringVar, **kwargs):
+        kwargs.setdefault("bg", "#111111")
+        kwargs.setdefault("highlightthickness", 1)
+        kwargs.setdefault("highlightbackground", BORDER2)
+        kwargs.setdefault("bd", 0)
+        super().__init__(parent, **kwargs)
+        self._var      = emotion_var
+        self._selected = "Neutral"
+        self.bind("<Configure>",  self._redraw)
+        self.bind("<Button-1>",   self._on_click)
+
+    def _redraw(self, _event=None):
+        self.delete("all")
+        w = self.winfo_width()
+        h = self.winfo_height()
+        if w < 10 or h < 10:
+            return
+
+        # Axis labels
+        self.create_text(4, h - 4, text="Dark", fill="#444444",
+                         font=("SF Mono", 7), anchor="sw")
+        self.create_text(4, 4, text="High", fill="#444444",
+                         font=("SF Mono", 7), anchor="nw")
+        self.create_text(w - 4, h - 4, text="Emotions", fill="#444444",
+                         font=("SF Mono", 7), anchor="se")
+
+        # Grid lines (subtle)
+        for frac in (0.25, 0.5, 0.75):
+            xi = int(w * frac)
+            yi = int(h * frac)
+            self.create_line(xi, 0, xi, h, fill="#1E1E1E", dash=(2, 4))
+            self.create_line(0, yi, w, yi, fill="#1E1E1E", dash=(2, 4))
+
+        # Dots
+        r = self._DOT_R
+        for label, fx, fy, color in _EMOTION_DOTS:
+            x = int(fx * w)
+            y = int(fy * h)
+            is_sel = (label == self._selected)
+            outline = "#FFFFFF" if is_sel else ""
+            ow      = 2 if is_sel else 0
+            self.create_oval(x - r, y - r, x + r, y + r,
+                             fill=color, outline=outline, width=ow)
+            if is_sel:
+                self.create_text(x, y - r - 4, text=label, fill="#FFFFFF",
+                                 font=("SF Mono", 7), anchor="s")
+
+    def _on_click(self, event):
+        w = self.winfo_width()
+        h = self.winfo_height()
+        best, best_d = None, 9999
+        r = self._DOT_R * 2.5
+        for label, fx, fy, _ in _EMOTION_DOTS:
+            dx = event.x - fx * w
+            dy = event.y - fy * h
+            d  = (dx * dx + dy * dy) ** 0.5
+            if d < best_d:
+                best_d, best = d, label
+        if best and best_d < r * 2:
+            self._selected = best
+            self._var.set(best)
+            self._redraw()
+
 
 class VoicePanel(ctk.CTkFrame):
-    """Right panel: voice, speed, emotion, format, output folder controls."""
+    """Right panel: detailed voice controls matching the reference UI."""
 
     def __init__(self, parent, **kwargs):
         super().__init__(
@@ -28,15 +114,20 @@ class VoicePanel(ctk.CTkFrame):
             border_width=1,
             **kwargs,
         )
-        self.configure(width=260)
+        self.configure(width=280)
         self.pack_propagate(False)
-        self._voice_var   = ctk.StringVar(value="Natural Female")
-        self._speed_var   = ctk.DoubleVar(value=1.0)
-        self._emotion_var = ctk.StringVar(value="Neutral")
-        self._format_var  = ctk.StringVar(value="WAV")
-        self._output_dir  = str(Path.home() / "Documents" / "AuraVoice")
-        self._clone_ref:  Optional[str] = None
+
+        self._voice_var       = ctk.StringVar(value="Natural Female")
+        self._speed_var       = ctk.DoubleVar(value=1.0)
+        self._stability_var   = ctk.DoubleVar(value=0.75)
+        self._exaggeration_var= ctk.DoubleVar(value=0.50)
+        self._emotion_var     = ctk.StringVar(value="Neutral")
+        self._format_var      = ctk.StringVar(value="WAV")
+        self._output_dir      = str(Path.home() / "Documents" / "AuraVoice")
+        self._clone_ref:      Optional[str] = None
         self._build()
+
+    # ── Helpers ────────────────────────────────────────────────────────────────
 
     def _section_lbl(self, parent, text: str):
         ctk.CTkLabel(
@@ -52,10 +143,39 @@ class VoicePanel(ctk.CTkFrame):
 
     def _divider(self, parent):
         ctk.CTkFrame(parent, fg_color=BORDER, height=1).pack(
-            fill="x", padx=PAD["xl"], pady=(PAD["md"], 0)
+            fill="x", padx=PAD["xl"], pady=(PAD["md"], 0),
         )
 
+    def _slider_row(self, parent, label: str, var: ctk.DoubleVar,
+                    from_: float, to_: float, fmt: str = "{:.2f}") -> ctk.CTkLabel:
+        """Build a label + slider + value label row. Returns the value label."""
+        row = ctk.CTkFrame(parent, fg_color="transparent")
+        row.pack(fill="x", padx=PAD["xl"], pady=(0, PAD["sm"]))
+        ctk.CTkLabel(row, text=label, font=FONTS["xs"],
+                     text_color=TEXT_DIM, width=88, anchor="w").pack(side="left")
+        val_lbl = ctk.CTkLabel(row, text=fmt.format(var.get()),
+                               font=FONTS["xs_bold"], text_color=TEXT_SUB, width=36)
+        val_lbl.pack(side="right")
+        ctk.CTkSlider(
+            row, from_=from_, to=to_, variable=var,
+            button_color=ACCENT, button_hover_color=ACCENT_HOV,
+            progress_color=ACCENT, fg_color=BORDER2,
+            command=lambda v, lbl=val_lbl, f=fmt: lbl.configure(text=f.format(v)),
+        ).pack(side="left", fill="x", expand=True)
+        return val_lbl
+
+    # ── Build ──────────────────────────────────────────────────────────────────
+
     def _build(self):
+        # Panel header bar
+        hdr = ctk.CTkFrame(self, fg_color="#0D0D0D", corner_radius=0, height=26)
+        hdr.pack(fill="x")
+        hdr.pack_propagate(False)
+        ctk.CTkLabel(
+            hdr, text="DETAILED VOICE DETAILS",
+            font=("SF Mono", 9), text_color="#2E2E2E",
+        ).pack(side="left", padx=10)
+
         scroll = ctk.CTkScrollableFrame(
             self, fg_color="transparent",
             scrollbar_button_color=BORDER2,
@@ -70,21 +190,19 @@ class VoicePanel(ctk.CTkFrame):
             dropdown_fg_color=SURFACE2,
             dropdown_hover_color=SURFACE3,
             dropdown_text_color=TEXT,
-            corner_radius=RADIUS["md"], height=36,
-            font=FONTS["base"],
-            dropdown_font=FONTS["base"],
+            corner_radius=RADIUS["md"], height=34,
+            font=FONTS["sm"],
+            dropdown_font=FONTS["sm"],
         )
 
-        self._section_lbl(scroll, "VOICE SETTINGS")
-
-        # Voice profile
-        self._field_lbl(scroll, "Voice Profile")
+        # ── MODEL ──
+        self._section_lbl(scroll, "MODEL")
         ctk.CTkOptionMenu(
             scroll, values=VOICE_NAMES, variable=self._voice_var,
             command=self._on_voice_change, **om_kw,
-        ).pack(fill="x", padx=PAD["xl"], pady=(0, PAD["md"]))
+        ).pack(fill="x", padx=PAD["xl"], pady=(0, PAD["sm"]))
 
-        # Clone ref card (hidden)
+        # Clone ref card (hidden until Custom Clone selected)
         self._clone_frame = ctk.CTkFrame(
             scroll, fg_color=SURFACE2, corner_radius=RADIUS["md"],
             border_color=BORDER2, border_width=1,
@@ -92,7 +210,7 @@ class VoicePanel(ctk.CTkFrame):
         inner_c = ctk.CTkFrame(self._clone_frame, fg_color="transparent")
         inner_c.pack(fill="x", padx=PAD["md"], pady=PAD["md"])
         ctk.CTkLabel(
-            inner_c, text="Reference WAV (6-30s clean speech)",
+            inner_c, text="Reference audio (6-30s clean speech)",
             font=FONTS["xs"], text_color=TEXT_DIM, anchor="w",
         ).pack(anchor="w")
         ref_row = ctk.CTkFrame(inner_c, fg_color="transparent")
@@ -103,41 +221,53 @@ class VoicePanel(ctk.CTkFrame):
         )
         self._clone_ref_label.pack(side="left", fill="x", expand=True)
         ctk.CTkButton(
-            ref_row, text="Browse", width=60, height=26,
+            ref_row, text="Browse", width=64, height=26,
             fg_color=ACCENT, hover_color=ACCENT_HOV,
             text_color="#000000", corner_radius=RADIUS["sm"],
             font=FONTS["xs_bold"],
             command=self._pick_clone_ref,
         ).pack(side="right")
 
-        # Speed
-        self._section_lbl(scroll, "SPEED")
-        speed_row = ctk.CTkFrame(scroll, fg_color="transparent")
-        speed_row.pack(fill="x", padx=PAD["xl"], pady=(0, PAD["md"]))
-        self._speed_label = ctk.CTkLabel(
-            speed_row, text="1.00x",
-            font=FONTS["xs_bold"], text_color=TEXT_SUB, width=40,
-        )
-        self._speed_label.pack(side="right")
-        ctk.CTkSlider(
-            speed_row, from_=0.5, to=2.0,
-            variable=self._speed_var,
-            button_color=ACCENT, button_hover_color=ACCENT_HOV,
-            progress_color=ACCENT, fg_color=BORDER2,
-            command=lambda v: self._speed_label.configure(text=f"{v:.2f}x"),
-        ).pack(side="left", fill="x", expand=True)
-
-        # Delivery style
-        self._section_lbl(scroll, "DELIVERY STYLE")
+        # ── SPEAKER / delivery ──
+        self._section_lbl(scroll, "SPEAKER")
         ctk.CTkOptionMenu(
             scroll, values=DELIVERY_STYLES, variable=self._emotion_var,
             **om_kw,
-        ).pack(fill="x", padx=PAD["xl"], pady=(0, PAD["md"]))
+        ).pack(fill="x", padx=PAD["xl"], pady=(0, PAD["sm"]))
 
+        # ── EMOTION & STYLE MAPPING ──
+        self._section_lbl(scroll, "EMOTION & STYLE MAPPING")
+        ctk.CTkLabel(
+            scroll, text="Click a dot to blend emotions",
+            font=FONTS["xs"], text_color=TEXT_DIM,
+        ).pack(anchor="w", padx=PAD["xl"], pady=(0, PAD["sm"]))
+
+        grid_frame = ctk.CTkFrame(
+            scroll, fg_color=SURFACE2,
+            corner_radius=RADIUS["sm"],
+            border_color=BORDER2, border_width=1,
+        )
+        grid_frame.pack(fill="x", padx=PAD["xl"], pady=(0, PAD["md"]))
+
+        self._emotion_grid = _EmotionGrid(
+            grid_frame, emotion_var=self._emotion_var,
+            width=240, height=120,
+        )
+        self._emotion_grid.pack(fill="x", padx=2, pady=2)
+
+        # ── CONTROLS ──
+        self._section_lbl(scroll, "CONTROLS")
+        self._slider_row(scroll, "Speed",        self._speed_var,
+                         0.5,  2.0, "{:.2f}x")
+        self._slider_row(scroll, "Stability",    self._stability_var,
+                         0.0,  1.0, "{:.2f}")
+        self._slider_row(scroll, "Exaggeration", self._exaggeration_var,
+                         0.0,  1.0, "{:.2f}")
+
+        # ── OUTPUT ──
         self._divider(scroll)
         self._section_lbl(scroll, "OUTPUT")
 
-        # Format
         self._field_lbl(scroll, "Format")
         fmt_row = ctk.CTkFrame(scroll, fg_color="transparent")
         fmt_row.pack(fill="x", padx=PAD["xl"], pady=(0, PAD["md"]))
@@ -148,7 +278,6 @@ class VoicePanel(ctk.CTkFrame):
                 fg_color=ACCENT, hover_color=ACCENT_HOV,
             ).pack(side="left", padx=(0, 16))
 
-        # Output folder
         self._field_lbl(scroll, "Output Folder")
         folder_row = ctk.CTkFrame(scroll, fg_color="transparent")
         folder_row.pack(fill="x", padx=PAD["xl"], pady=(0, PAD["lg"]))
@@ -165,11 +294,13 @@ class VoicePanel(ctk.CTkFrame):
             command=self._pick_folder,
         ).pack(side="right")
 
-    def _shorten(self, path: str, maxlen: int = 24) -> str:
+    # ── Helpers ────────────────────────────────────────────────────────────────
+
+    def _shorten(self, path: str, maxlen: int = 22) -> str:
         home = str(Path.home())
         if path.startswith(home):
             path = "~" + path[len(home):]
-        return ("..." + path[-maxlen+1:]) if len(path) > maxlen else path
+        return ("..." + path[-(maxlen - 1):]) if len(path) > maxlen else path
 
     def _on_voice_change(self, val: str):
         if val == "Custom (Clone)":
@@ -178,19 +309,33 @@ class VoicePanel(ctk.CTkFrame):
             self._clone_frame.pack_forget()
 
     def _pick_clone_ref(self):
+        """Open file dialog accepting WAV, MP3, M4A, FLAC, OGG audio files."""
         p = filedialog.askopenfilename(
-            title="Reference WAV",
-            filetypes=[("WAV", "*.wav"), ("All", "*.*")],
+            title="Select Reference Audio",
+            filetypes=[
+                ("Audio files", "*.wav *.mp3 *.m4a *.flac *.ogg *.aif *.aiff"),
+                ("WAV",  "*.wav"),
+                ("MP3",  "*.mp3"),
+                ("M4A",  "*.m4a"),
+                ("FLAC", "*.flac"),
+                ("All",  "*.*"),
+            ],
         )
         if p:
             self._clone_ref = p
-            self._clone_ref_label.configure(text=Path(p).name)
+            name = Path(p).name
+            self._clone_ref_label.configure(
+                text=(name[:26] + "...") if len(name) > 26 else name,
+                text_color=TEXT,
+            )
 
     def _pick_folder(self):
         d = filedialog.askdirectory(title="Output Folder", initialdir=self._output_dir)
         if d:
             self._output_dir = d
             self._folder_label.configure(text=self._shorten(d))
+
+    # ── Public API ─────────────────────────────────────────────────────────────
 
     def get_settings(self) -> dict:
         return {

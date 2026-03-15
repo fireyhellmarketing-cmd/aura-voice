@@ -121,6 +121,15 @@ class MainView(ctk.CTkFrame):
     # ── Build ──────────────────────────────────────────────────────────────────
 
     def _build(self):
+        # Panel header bar (matches wave_canvas / voice_panel style)
+        hdr = ctk.CTkFrame(self, fg_color="#0D0D0D", corner_radius=0, height=26)
+        hdr.pack(fill="x")
+        hdr.pack_propagate(False)
+        ctk.CTkLabel(
+            hdr, text="TEXT EDITOR",
+            font=("SF Mono", 9), text_color="#2E2E2E",
+        ).pack(side="left", padx=10)
+
         # Scrollable container fills entire frame
         self._scroll = ctk.CTkScrollableFrame(
             self,

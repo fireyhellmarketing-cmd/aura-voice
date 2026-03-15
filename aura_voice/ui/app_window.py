@@ -189,33 +189,39 @@ class AuraVoiceApp(ctk.CTk):
         # 3 rows: titlebar | body | bottom bento
         self.rowconfigure(0, weight=0)   # title bar
         self.rowconfigure(1, weight=1)   # body
-        self.rowconfigure(2, weight=0)   # bottom bento (fixed height 140px)
+        self.rowconfigure(2, weight=0)   # bottom bento (fixed height 160px)
         self.columnconfigure(0, weight=1)
 
         self._build_titlebar()     # row=0
 
-        # Body: sidebar | content | voice panel
+        # Body: sidebar | text-editor | wave-canvas | voice panel
         body = ctk.CTkFrame(self, fg_color=BG_DEEP, corner_radius=0)
         body.grid(row=1, column=0, sticky="nsew")
         body.rowconfigure(0, weight=1)
         body.columnconfigure(0, weight=0)   # sidebar (58px)
-        body.columnconfigure(1, weight=1)   # content
-        body.columnconfigure(2, weight=0)   # voice panel (260px)
+        body.columnconfigure(1, weight=2)   # text editor
+        body.columnconfigure(2, weight=3)   # wave canvas
+        body.columnconfigure(3, weight=0)   # voice panel (280px)
 
         # Sidebar
         from ui.sidebar import Sidebar
         self._sidebar = Sidebar(body, on_nav=self._on_sidebar_nav)
         self._sidebar.grid(row=0, column=0, sticky="ns")
 
-        # Content (MainView without centering)
+        # Text editor (MainView)
         self._main_view = MainView(body)
         self._main_view.grid(row=0, column=1, sticky="nsew")
         self._main_view.on_generate = self._start_synthesis
 
+        # Wave canvas
+        from ui.wave_canvas import WaveCanvas
+        self._wave_canvas = WaveCanvas(body)
+        self._wave_canvas.grid(row=0, column=2, sticky="nsew")
+
         # Voice panel
         from ui.voice_panel import VoicePanel
         self._voice_panel = VoicePanel(body)
-        self._voice_panel.grid(row=0, column=2, sticky="ns")
+        self._voice_panel.grid(row=0, column=3, sticky="ns")
 
         # Set initial config values
         self._voice_panel.set_output_dir(
@@ -289,38 +295,87 @@ class AuraVoiceApp(ctk.CTk):
         self._gear_btn.bind("<Enter>", lambda *_: self._gear_btn.configure(text_color=ACCENT_HOV))
         self._gear_btn.bind("<Leave>", lambda *_: self._gear_btn.configure(text_color=TEXT_DIM))
 
+    # ── Sparkline helpers ──────────────────────────────────────────────────────
+
+    def _draw_sparkline(self, canvas, data: list, color: str,
+                         w: int = 155, h: int = 22):
+        """Draw a mini sparkline into a tk.Canvas widget."""
+        canvas.delete("all")
+        if len(data) < 2:
+            return
+        mx = max(data) or 1
+        mn = min(data)
+        rng = mx - mn or 1
+        pts = []
+        for i, v in enumerate(data):
+            x = int(i * w / (len(data) - 1))
+            y = int(h - (v - mn) / rng * (h - 2) - 1)
+            pts += [x, y]
+        if len(pts) >= 4:
+            canvas.create_line(pts, fill=color, width=1.5, smooth=True)
+
     def _build_bottom_bento(self):
+        import tkinter as tk_raw
         bento = ctk.CTkFrame(self, fg_color=SURFACE, corner_radius=0,
                               border_color=BORDER, border_width=1)
         bento.grid(row=2, column=0, sticky="ew")
-        bento.configure(height=140)
+        bento.configure(height=160)
         bento.grid_propagate(False)
         bento.rowconfigure(0, weight=1)
-        bento.columnconfigure(0, weight=0)   # diagnostics ~180px
+        bento.columnconfigure(0, weight=0)   # diagnostics ~200px
         bento.columnconfigure(1, weight=1)   # terminal
-        bento.columnconfigure(2, weight=0)   # player ~240px
+        bento.columnconfigure(2, weight=0)   # player ~260px
 
-        # Cell 0: Diagnostics
+        # ── Cell 0: Diagnostics with sparklines ──────────────────────────────
         diag = ctk.CTkFrame(bento, fg_color=BG_DEEP, corner_radius=0,
-                             border_color=BORDER, border_width=1, width=180)
+                             border_color=BORDER, border_width=1, width=200)
         diag.grid(row=0, column=0, sticky="nsew")
         diag.grid_propagate(False)
 
-        ctk.CTkLabel(diag, text="DIAGNOSTICS", font=FONTS["xs_bold"],
-                      text_color=TEXT_DIM).pack(anchor="w", padx=10, pady=(8, 4))
+        # Header
+        diag_hdr = ctk.CTkFrame(diag, fg_color="#0D0D0D", corner_radius=0, height=22)
+        diag_hdr.pack(fill="x")
+        diag_hdr.pack_propagate(False)
+        ctk.CTkLabel(diag_hdr, text="DIAGNOSTICS",
+                     font=("SF Mono", 9), text_color="#2E2E2E").pack(
+                     side="left", padx=8)
 
-        self._diag_cpu_lbl = ctk.CTkLabel(diag, text="CPU  --",
-            font=FONTS["mono_xs"], text_color=TEXT_SUB, anchor="w")
-        self._diag_cpu_lbl.pack(anchor="w", padx=10)
+        # CPU row
+        cpu_row = ctk.CTkFrame(diag, fg_color="transparent")
+        cpu_row.pack(fill="x", padx=8, pady=(6, 0))
+        self._diag_cpu_lbl = ctk.CTkLabel(cpu_row, text="CPU LOAD",
+            font=FONTS["xs"], text_color=TEXT_DIM, width=58, anchor="w")
+        self._diag_cpu_lbl.pack(side="left")
+        self._cpu_val_lbl = ctk.CTkLabel(cpu_row, text="--",
+            font=FONTS["xs_bold"], text_color="#4ADE80", anchor="e", width=38)
+        self._cpu_val_lbl.pack(side="right")
+        self._cpu_spark = tk_raw.Canvas(diag, bg=BG_DEEP,
+            height=18, highlightthickness=0, bd=0)
+        self._cpu_spark.pack(fill="x", padx=8, pady=(1, 4))
 
-        self._diag_ram_lbl = ctk.CTkLabel(diag, text="RAM  --",
-            font=FONTS["mono_xs"], text_color=TEXT_SUB, anchor="w")
-        self._diag_ram_lbl.pack(anchor="w", padx=10)
+        # RAM row
+        ram_row = ctk.CTkFrame(diag, fg_color="transparent")
+        ram_row.pack(fill="x", padx=8)
+        self._diag_ram_lbl = ctk.CTkLabel(ram_row, text="VRAM",
+            font=FONTS["xs"], text_color=TEXT_DIM, width=58, anchor="w")
+        self._diag_ram_lbl.pack(side="left")
+        self._ram_val_lbl = ctk.CTkLabel(ram_row, text="--",
+            font=FONTS["xs_bold"], text_color="#F59E0B", anchor="e", width=38)
+        self._ram_val_lbl.pack(side="right")
+        self._ram_spark = tk_raw.Canvas(diag, bg=BG_DEEP,
+            height=18, highlightthickness=0, bd=0)
+        self._ram_spark.pack(fill="x", padx=8, pady=(1, 4))
 
-        self._diag_mdl_lbl = ctk.CTkLabel(diag, text="Model  --",
-            font=FONTS["mono_xs"], text_color=TEXT_DIM, anchor="w",
-            wraplength=160)
-        self._diag_mdl_lbl.pack(anchor="w", padx=10, pady=(4, 0))
+        # Model label at bottom
+        self._diag_mdl_lbl = ctk.CTkLabel(
+            diag, text="Model  --",
+            font=FONTS["mono_xs"], text_color="#333333", anchor="w",
+        )
+        self._diag_mdl_lbl.pack(anchor="w", padx=8)
+
+        # Sparkline history buffers (last 30 readings)
+        self._cpu_hist: list = []
+        self._ram_hist: list = []
 
         # Cell 1: Terminal
         self._terminal = TerminalWidget(
@@ -415,18 +470,32 @@ class AuraVoiceApp(ctk.CTk):
     def _update_stats_bar(self):
         try:
             import psutil
-            cpu = psutil.cpu_percent(interval=None)
+            cpu    = psutil.cpu_percent(interval=None)
             ram_gb = psutil.virtual_memory().used / 1e9
-            name = self._config.get("selected_model", "VCTK VITS").split("--")[0].strip()
+            name   = self._config.get("selected_model", "VCTK VITS").split("—")[0].strip()
 
-            # Update bento diagnostics
-            if hasattr(self, "_diag_cpu_lbl"):
-                self._diag_cpu_lbl.configure(text=f"CPU  {cpu:.0f}%")
-                self._diag_ram_lbl.configure(text=f"RAM  {ram_gb:.1f} GB")
-                self._diag_mdl_lbl.configure(text=f"{name}")
+            # Update sparkline buffers (keep last 30 readings)
+            if hasattr(self, "_cpu_hist"):
+                self._cpu_hist.append(cpu)
+                self._ram_hist.append(ram_gb)
+                if len(self._cpu_hist) > 30: self._cpu_hist.pop(0)
+                if len(self._ram_hist) > 30: self._ram_hist.pop(0)
+
+            # Redraw sparklines
+            if hasattr(self, "_cpu_spark"):
+                w = max(self._cpu_spark.winfo_width(), 10)
+                h = max(self._cpu_spark.winfo_height(), 10)
+                self._draw_sparkline(self._cpu_spark, self._cpu_hist,
+                                     "#4ADE80", w, h)
+                self._draw_sparkline(self._ram_spark, self._ram_hist,
+                                     "#F59E0B", w, h)
+                self._cpu_val_lbl.configure(text=f"{cpu:.0f}%")
+                self._ram_val_lbl.configure(text=f"{ram_gb:.1f}G")
+                self._diag_mdl_lbl.configure(text=name[:22])
+
         except Exception:
             pass
-        self.after(3000, self._update_stats_bar)
+        self.after(2000, self._update_stats_bar)
 
     # ── Settings sheet ─────────────────────────────────────────────────────────
 
