@@ -2,6 +2,7 @@
 
 import os
 import json
+import platform as _platform_sys
 from pathlib import Path
 from typing import Dict, Any
 
@@ -141,11 +142,15 @@ MODEL_CATALOG: Dict[str, Dict[str, Any]] = {
 
 def get_model_cache_root() -> Path:
     """Return the root directory where Coqui/TTS caches models."""
-    # Coqui TTS stores models in ~/.local/share/tts on Linux/Mac and
-    # %APPDATA%/tts on Windows by default.
     env_override = os.environ.get("TTS_HOME")
     if env_override:
         return Path(env_override)
+    sys_name = _platform_sys.system()
+    if sys_name == "Darwin":
+        return Path.home() / "Library" / "Application Support" / "tts"
+    if sys_name == "Windows":
+        local = os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
+        return Path(local) / "tts"
     return Path.home() / ".local" / "share" / "tts"
 
 
@@ -161,15 +166,25 @@ def get_model_cache_path(model_id: str) -> Path:
 
 
 def is_model_downloaded(model_id: str) -> bool:
-    """Return True if the model directory exists and appears non-empty."""
-    path = get_model_cache_path(model_id)
-    if not path.exists():
-        return False
-    # Check for at least one file inside
-    try:
-        return any(path.iterdir())
-    except Exception:
-        return False
+    """Return True if the model directory exists on any known cache path."""
+    slug = model_id.replace("/", "--")
+    candidates = [
+        get_model_cache_root() / slug,
+        Path.home() / "Library" / "Application Support" / "tts" / slug,
+        Path.home() / ".local" / "share" / "tts" / slug,
+        Path.home() / "AppData" / "Local" / "tts" / slug,
+    ]
+    env_home = os.environ.get("TTS_HOME")
+    if env_home:
+        candidates.insert(0, Path(env_home) / slug)
+    for path in candidates:
+        if path.exists():
+            try:
+                if any(path.iterdir()):
+                    return True
+            except Exception:
+                pass
+    return False
 
 
 def get_downloaded_size_gb(model_id: str) -> float:

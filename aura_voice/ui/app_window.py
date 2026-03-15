@@ -652,17 +652,21 @@ class AuraVoiceApp(ctk.CTk):
 
         settings = self._controls.get_settings()
 
-        # Voice cloning is not supported by the current VCTK VITS model.
-        # Inform the user and fall back to Natural Female instead.
+        # Voice cloning: requires a reference audio file
         if settings["voice_profile"] == "Custom (Clone)":
-            messagebox.showinfo(
-                "Voice Clone — Not Available",
-                "Voice cloning requires the XTTS v2 model.\n\n"
-                "The current model (VCTK VITS) does not support cloning.\n"
-                "Generating with 'Natural Female' instead.\n\n"
-                "To enable cloning, change the model to 'XTTS v2 — Multilingual Pro' in Settings.",
+            ref = settings.get("clone_ref_path")
+            if not ref or not Path(ref).exists():
+                messagebox.showwarning(
+                    "No Reference Audio",
+                    "Voice cloning requires a reference audio file.\n\n"
+                    "Go to the Advanced tab → Voice Profile → Custom (Clone) "
+                    "and click Browse to select a WAV or MP3 sample (5–30 seconds).",
+                )
+                return
+            self._terminal.write(
+                f"[Generate] Voice clone mode — XTTS v2 will load on first use (~1.87 GB)\n",
+                "blue",
             )
-            settings["voice_profile"] = "Natural Female"
 
         # Prepare output path
         from core.tts_engine import chunk_text

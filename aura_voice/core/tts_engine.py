@@ -20,7 +20,8 @@ from typing import Callable, Dict, List, Optional
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
 
-MODEL_NAME = "tts_models/en/vctk/vits"
+MODEL_NAME       = "tts_models/en/vctk/vits"
+XTTS_MODEL_NAME  = "tts_models/multilingual/multi-dataset/xtts_v2"
 
 CHUNK_TARGET_WORDS = 100   # VITS handles shorter chunks best
 CHUNK_MAX_WORDS    = 150
@@ -46,6 +47,18 @@ EMOTION_PREFIXES: Dict[str, str] = {k: "" for k in [
     "Neutral", "Happy & Upbeat", "Serious & Authoritative",
     "Sad & Reflective", "Excited & Enthusiastic", "Calm & Meditative",
 ]}
+
+# Delivery style → speed multiplier applied on top of user speed setting
+EMOTION_SPEEDS: Dict[str, float] = {
+    "Neutral":                  1.00,
+    "Happy & Upbeat":           1.10,
+    "Serious & Authoritative":  0.93,
+    "Sad & Reflective":         0.82,
+    "Excited & Enthusiastic":   1.20,
+    "Calm & Meditative":        0.80,
+    "Warm & Friendly":          1.02,
+    "Professional":             0.95,
+}
 
 # Language codes (kept for UI; VITS model is English-only)
 LANGUAGE_CODES: Dict[str, str] = {
@@ -126,6 +139,10 @@ class TTSEngine:
         self._tts          = None
         self._model_loaded = False
         self._lock         = threading.Lock()
+        # XTTS v2 — lazily loaded only when voice cloning is requested
+        self._xtts_tts     = None
+        self._xtts_loaded  = False
+        self._xtts_lock    = threading.Lock()
 
     # ── Model helpers ────────────────────────────────────────────────────────
 
@@ -189,6 +206,51 @@ class TTSEngine:
             except Exception:
                 return []
 
+    # ── XTTS v2 (voice cloning) ──────────────────────────────────────────────
+
+    def _load_xtts_if_needed(
+        self,
+        progress_callback: Optional[Callable[[str], None]] = None,
+    ) -> None:
+        """Lazily load XTTS v2 the first time voice cloning is requested."""
+        with self._xtts_lock:
+            if self._xtts_loaded:
+                return
+        if progress_callback:
+            progress_callback("Loading XTTS v2 for voice cloning…")
+        import os
+        os.environ.setdefault("COQUI_TOS_AGREED", "1")
+        from TTS.api import TTS
+        xtts = TTS(XTTS_MODEL_NAME, gpu=False)
+        with self._xtts_lock:
+            self._xtts_tts    = xtts
+            self._xtts_loaded = True
+        if progress_callback:
+            progress_callback("XTTS v2 ready.")
+
+    def _synthesise_chunk_xtts(
+        self,
+        text: str,
+        output_path: Path,
+        reference_wav: Path,
+        language: str = "en",
+    ) -> None:
+        """Synthesise one chunk using XTTS v2 (voice cloning)."""
+        with self._xtts_lock:
+            tts = self._xtts_tts
+        if tts is None:
+            raise RuntimeError("XTTS model not loaded.")
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            tts.tts_to_file(
+                text=text,
+                speaker_wav=str(reference_wav),
+                language=language,
+                file_path=str(output_path),
+            )
+        except Exception as exc:
+            raise RuntimeError(f"XTTS synthesis failed: {exc}") from exc
+
     # ── Single-chunk synthesis ───────────────────────────────────────────────
 
     def synthesise_chunk(
@@ -240,9 +302,26 @@ class TTSEngine:
     ) -> Optional[Path]:
         from core.audio_utils import stitch_chunks, export_wav, export_mp3, cleanup_temp_directory
 
-        speaker_id = VOICE_PROFILES.get(voice_profile, "p225")
-        chunks     = chunk_text(text)
-        total      = len(chunks)
+        # Determine if we're cloning
+        use_clone = voice_profile == "Custom (Clone)" and reference_wav is not None
+
+        if use_clone:
+            # Load XTTS v2 lazily (blocks until ready — runs in background thread)
+            try:
+                self._load_xtts_if_needed()
+            except Exception as exc:
+                if on_error:
+                    on_error(f"Failed to load XTTS v2: {exc}")
+                return None
+        else:
+            speaker_id = VOICE_PROFILES.get(voice_profile, "p225")
+
+        # Apply delivery-style speed multiplier on top of user speed
+        emotion_mult   = EMOTION_SPEEDS.get(emotion, 1.0)
+        effective_speed = round(speed * emotion_mult, 3)
+
+        chunks = chunk_text(text)
+        total  = len(chunks)
 
         if total == 0:
             if on_error:
@@ -264,12 +343,20 @@ class TTSEngine:
 
                 chunk_path = temp_dir / f"chunk_{idx + 1:04d}.wav"
                 t0 = time.perf_counter()
-                self.synthesise_chunk(
-                    text=chunk,
-                    output_path=chunk_path,
-                    speaker=speaker_id,
-                    speed=speed,
-                )
+                if use_clone:
+                    self._synthesise_chunk_xtts(
+                        text=chunk,
+                        output_path=chunk_path,
+                        reference_wav=reference_wav,
+                        language=language,
+                    )
+                else:
+                    self.synthesise_chunk(
+                        text=chunk,
+                        output_path=chunk_path,
+                        speaker=speaker_id,
+                        speed=effective_speed,
+                    )
                 elapsed = time.perf_counter() - t0
                 chunk_times.append(elapsed)
                 chunk_paths.append(chunk_path)
