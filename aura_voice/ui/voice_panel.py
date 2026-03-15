@@ -16,6 +16,11 @@ from assets.styles import (
     FONTS, PAD, RADIUS,
 )
 from core.tts_engine import VOICE_PROFILES, EMOTION_SPEEDS, LANGUAGE_CODES
+from pathlib import Path as _Path
+from core.tts_engine import TTSEngine as _TTSEngine
+
+_PROFILES_DIR = _Path.home() / "Documents" / "AuraVoice" / "profiles"
+_SAVED_PREFIX  = "👤 "   # prefix for saved voice profiles in the dropdown
 
 DELIVERY_STYLES = list(EMOTION_SPEEDS.keys())
 VOICE_NAMES     = list(VOICE_PROFILES.keys())
@@ -125,7 +130,14 @@ class VoicePanel(ctk.CTkFrame):
         self._format_var      = ctk.StringVar(value="WAV")
         self._output_dir      = str(Path.home() / "Documents" / "AuraVoice")
         self._clone_ref:      Optional[str] = None
+        self.on_save_profile: Optional[callable] = None   # callback(profile_name)
+        self._saved_profiles: dict = {}   # {name: npz_path}
+        self._refresh_saved_profiles()
         self._build()
+
+    def _refresh_saved_profiles(self):
+        """Load saved profiles from disk and rebuild the voice dropdown values."""
+        self._saved_profiles = _TTSEngine.list_speaker_profiles(_PROFILES_DIR)
 
     # ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -197,10 +209,11 @@ class VoicePanel(ctk.CTkFrame):
 
         # ── MODEL ──
         self._section_lbl(scroll, "MODEL")
-        ctk.CTkOptionMenu(
-            scroll, values=VOICE_NAMES, variable=self._voice_var,
+        self._voice_menu = ctk.CTkOptionMenu(
+            scroll, values=self._build_voice_list(), variable=self._voice_var,
             command=self._on_voice_change, **om_kw,
-        ).pack(fill="x", padx=PAD["xl"], pady=(0, PAD["sm"]))
+        )
+        self._voice_menu.pack(fill="x", padx=PAD["xl"], pady=(0, PAD["sm"]))
 
         # Clone ref card (hidden until Custom Clone selected)
         self._clone_frame = ctk.CTkFrame(
@@ -227,6 +240,22 @@ class VoicePanel(ctk.CTkFrame):
             font=FONTS["xs_bold"],
             command=self._pick_clone_ref,
         ).pack(side="right")
+
+        # "Save as Profile" button — shown after ref is picked
+        self._save_profile_btn = ctk.CTkButton(
+            inner_c,
+            text="💾  Save as Voice Profile...",
+            height=28,
+            fg_color="transparent",
+            hover_color=SURFACE3,
+            text_color=TEXT_SUB,
+            border_color=BORDER2,
+            border_width=1,
+            corner_radius=RADIUS["sm"],
+            font=FONTS["xs"],
+            command=self._on_save_profile_click,
+        )
+        # not packed yet — shown after a ref file is chosen
 
         # ── SPEAKER / delivery ──
         self._section_lbl(scroll, "SPEAKER")
@@ -308,6 +337,14 @@ class VoicePanel(ctk.CTkFrame):
         else:
             self._clone_frame.pack_forget()
 
+    def _get_profile_npz(self) -> Optional[str]:
+        """Return npz path if a saved profile is selected, else None."""
+        val = self._voice_var.get()
+        if val.startswith(_SAVED_PREFIX):
+            name = val[len(_SAVED_PREFIX):]
+            return self._saved_profiles.get(name)
+        return None
+
     def _pick_clone_ref(self):
         """Open file dialog accepting WAV, MP3, M4A, FLAC, OGG audio files."""
         p = filedialog.askopenfilename(
@@ -328,6 +365,7 @@ class VoicePanel(ctk.CTkFrame):
                 text=(name[:26] + "...") if len(name) > 26 else name,
                 text_color=TEXT,
             )
+            self._save_profile_btn.pack(fill="x", pady=(8, 0))
 
     def _pick_folder(self):
         d = filedialog.askdirectory(title="Output Folder", initialdir=self._output_dir)
@@ -335,17 +373,78 @@ class VoicePanel(ctk.CTkFrame):
             self._output_dir = d
             self._folder_label.configure(text=self._shorten(d))
 
+    def _build_voice_list(self) -> list:
+        """Build the full voice dropdown list: standard + saved profiles."""
+        names = list(VOICE_NAMES)
+        if self._saved_profiles:
+            for name in self._saved_profiles:
+                names.append(_SAVED_PREFIX + name)
+        return names
+
+    def _on_save_profile_click(self):
+        """Open a name-entry dialog and trigger save."""
+        win = ctk.CTkToplevel(self.winfo_toplevel())
+        win.title("Save Voice Profile")
+        win.geometry("340x160")
+        win.resizable(False, False)
+        win.configure(fg_color="#0A0A0A")
+        win.grab_set()
+        win.focus_set()
+
+        from assets.styles import BG_DEEP, SURFACE, BORDER, BORDER2, TEXT, TEXT_DIM
+        ctk.CTkLabel(
+            win, text="Profile Name",
+            font=FONTS["sm_bold"], text_color=TEXT,
+        ).pack(anchor="w", padx=20, pady=(20, 4))
+
+        entry = ctk.CTkEntry(
+            win, fg_color=SURFACE, border_color=BORDER2,
+            text_color=TEXT, font=FONTS["base"], height=34,
+        )
+        entry.pack(fill="x", padx=20, pady=(0, 16))
+        entry.insert(0, "My Voice")
+        entry.focus_set()
+        entry.select_range(0, "end")
+
+        def _save():
+            name = entry.get().strip()
+            if not name:
+                return
+            win.destroy()
+            if self.on_save_profile:
+                self.on_save_profile(name)
+
+        entry.bind("<Return>", lambda _: _save())
+        ctk.CTkButton(
+            win, text="Save",
+            height=34, fg_color="#FFFFFF", hover_color="#E5E5E5",
+            text_color="#000000", corner_radius=8,
+            font=FONTS["sm_bold"],
+            command=_save,
+        ).pack(fill="x", padx=20)
+
+    def refresh_profiles(self):
+        """Reload saved profiles from disk and update the voice dropdown."""
+        self._refresh_saved_profiles()
+        if hasattr(self, "_voice_menu"):
+            self._voice_menu.configure(values=self._build_voice_list())
+
     # ── Public API ─────────────────────────────────────────────────────────────
 
     def get_settings(self) -> dict:
+        val = self._voice_var.get()
+        profile_npz = self._get_profile_npz()
+        # For saved profiles, report voice_profile as "Custom (Clone)" so engine uses XTTS
+        voice_profile = "Custom (Clone)" if profile_npz else val
         return {
-            "voice_profile":  self._voice_var.get(),
-            "delivery_style": self._emotion_var.get(),
-            "language":       "English",
-            "speed":          round(self._speed_var.get(), 2),
-            "output_format":  self._format_var.get(),
-            "output_dir":     self._output_dir,
-            "clone_ref_path": self._clone_ref,
+            "voice_profile":   voice_profile,
+            "delivery_style":  self._emotion_var.get(),
+            "language":        "English",
+            "speed":           round(self._speed_var.get(), 2),
+            "output_format":   self._format_var.get(),
+            "output_dir":      self._output_dir,
+            "clone_ref_path":  self._clone_ref,
+            "profile_npz_path": profile_npz,
         }
 
     def set_output_dir(self, path: str):
@@ -354,3 +453,6 @@ class VoicePanel(ctk.CTkFrame):
 
     def set_output_format(self, fmt: str):
         self._format_var.set(fmt.upper())
+
+    def set_clone_ref_path(self, path: Optional[str]):
+        self._clone_ref = path

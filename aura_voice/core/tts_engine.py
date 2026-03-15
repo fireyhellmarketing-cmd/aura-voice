@@ -228,28 +228,261 @@ class TTSEngine:
         if progress_callback:
             progress_callback("XTTS v2 ready.")
 
+    # ── XTTS helpers ────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _patch_torchaudio_load():
+        """
+        torchaudio >= 2.9 routes torchaudio.load() through TorchCodec which
+        requires torchcodec (not installed). Monkey-patch to use soundfile.
+        Returns the original so caller can restore it.
+        """
+        import torchaudio
+        import torch
+        import soundfile as _sf
+
+        original = torchaudio.load
+
+        def _sf_load(path, frame_offset=0, num_frames=-1,
+                     normalize=True, channels_first=True, format=None, **_kw):
+            data, sr = _sf.read(str(path), dtype="float32", always_2d=True)
+            tensor = torch.from_numpy(data.T)   # [channel, time]
+            if frame_offset:
+                tensor = tensor[:, frame_offset:]
+            if num_frames > 0:
+                tensor = tensor[:, :num_frames]
+            if not channels_first:
+                tensor = tensor.T
+            return tensor, sr
+
+        torchaudio.load = _sf_load
+        return original
+
+    @staticmethod
+    def _prepare_ref_wav(reference_wav: Path) -> Path:
+        """Convert any audio to 22050 Hz mono PCM WAV for XTTS compatibility."""
+        import tempfile
+        tmp = Path(tempfile.mktemp(suffix="_ref.wav"))
+        try:
+            from pydub import AudioSegment
+            seg = AudioSegment.from_file(str(reference_wav))
+            seg = seg.set_frame_rate(22050).set_channels(1).set_sample_width(2)
+            seg.export(str(tmp), format="wav")
+            return tmp
+        except Exception:
+            try:
+                import soundfile as sf
+                import numpy as np
+                data, sr = sf.read(str(reference_wav), always_2d=False)
+                if data.ndim > 1:
+                    data = data.mean(axis=1)
+                sf.write(str(tmp), data, sr, subtype="PCM_16")
+                return tmp
+            except Exception:
+                return reference_wav
+
+    @staticmethod
+    def _load_npz_embeddings(path: Path):
+        """Load cached (gpt_cond_latent, speaker_embedding) from .npz file."""
+        import numpy as np
+        import torch
+        d = np.load(str(path))
+        return (
+            torch.from_numpy(d["gpt_cond_latent"]),
+            torch.from_numpy(d["speaker_embedding"]),
+        )
+
+    @staticmethod
+    def _save_npz_embeddings(path: Path, gpt_cond, spk_emb) -> None:
+        """Save (gpt_cond_latent, speaker_embedding) tensors to .npz file."""
+        import numpy as np
+        np.savez(
+            str(path),
+            gpt_cond_latent=gpt_cond.cpu().numpy(),
+            speaker_embedding=spk_emb.cpu().numpy(),
+        )
+
+    def _get_speaker_embeddings(
+        self,
+        model,
+        reference_wav: Path,
+        profile_npz: Optional[Path] = None,
+    ):
+        """
+        Return (gpt_cond_latent, speaker_embedding) for a reference audio.
+
+        Priority:
+          1. profile_npz     — pre-saved named profile (.npz)
+          2. auto-cache npz  — cached next to the reference file
+          3. live encode     — compute from reference_wav and cache it
+        """
+        # 1. Named saved profile
+        if profile_npz and profile_npz.exists():
+            return self._load_npz_embeddings(profile_npz)
+
+        # 2. Auto-cache
+        cache_path = reference_wav.with_suffix("").with_suffix(".xtts_emb.npz")
+        # ^ e.g. /path/voice.wav  →  /path/voice.xtts_emb.npz
+        if cache_path.exists():
+            return self._load_npz_embeddings(cache_path)
+
+        # 3. Encode from reference (slow, done once)
+        ref_path = self._prepare_ref_wav(reference_wav)
+        try:
+            gpt_cond, spk_emb = model.get_conditioning_latents(
+                audio_path=[str(ref_path)],
+                gpt_cond_len=30,
+                max_ref_length=60,
+                sound_norm_refs=False,
+            )
+        finally:
+            if ref_path != reference_wav:
+                try:
+                    ref_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+
+        # Cache result
+        try:
+            self._save_npz_embeddings(cache_path, gpt_cond, spk_emb)
+        except Exception:
+            pass  # cache failure is non-fatal
+
+        return gpt_cond, spk_emb
+
     def _synthesise_chunk_xtts(
         self,
         text: str,
         output_path: Path,
-        reference_wav: Path,
+        reference_wav: Optional[Path] = None,
         language: str = "en",
+        profile_npz: Optional[Path] = None,
     ) -> None:
-        """Synthesise one chunk using XTTS v2 (voice cloning)."""
+        """
+        Synthesise one chunk using XTTS v2.
+
+        Uses pre-computed speaker embeddings when available (fast path).
+        Falls back to encoding the reference on first use, then caches.
+        """
         with self._xtts_lock:
             tts = self._xtts_tts
         if tts is None:
             raise RuntimeError("XTTS model not loaded.")
+
         output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # XTTS needs at least ~15 chars for stable output
+        if len(text.strip()) < 15:
+            text = (text.strip() + " ") * 3
+
+        model = tts.synthesizer.tts_model
+
+        orig_load = self._patch_torchaudio_load()
         try:
-            tts.tts_to_file(
+            gpt_cond, spk_emb = self._get_speaker_embeddings(
+                model, reference_wav, profile_npz
+            )
+
+            out = model.inference(
                 text=text,
-                speaker_wav=str(reference_wav),
                 language=language,
-                file_path=str(output_path),
+                gpt_cond_latent=gpt_cond,
+                speaker_embedding=spk_emb,
+                temperature=0.65,
+                repetition_penalty=10.0,
+                top_k=50,
+                top_p=0.85,
+                enable_text_splitting=True,
             )
         except Exception as exc:
             raise RuntimeError(f"XTTS synthesis failed: {exc}") from exc
+        finally:
+            import torchaudio as _ta
+            _ta.load = orig_load
+
+        # Write 24000 Hz mono PCM WAV (XTTS native sample rate)
+        import numpy as np
+        import wave as _wave
+        wav = np.array(out["wav"])
+        wav_i16 = (wav * 32767).clip(-32768, 32767).astype(np.int16)
+        with _wave.open(str(output_path), "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(24000)
+            wf.writeframes(wav_i16.tobytes())
+
+    def encode_speaker_profile(
+        self,
+        reference_wav: Path,
+        profile_name: str,
+        profiles_dir: Path,
+    ) -> Path:
+        """
+        Encode a reference audio file into a named reusable speaker profile.
+        Saves a .npz and updates profiles.json in profiles_dir.
+        Returns the path to the .npz file.
+        """
+        with self._xtts_lock:
+            tts = self._xtts_tts
+        if tts is None:
+            raise RuntimeError("XTTS model not loaded. Generate one clone first.")
+
+        profiles_dir.mkdir(parents=True, exist_ok=True)
+        ref_path = self._prepare_ref_wav(reference_wav)
+
+        model = tts.synthesizer.tts_model
+        orig = self._patch_torchaudio_load()
+        try:
+            gpt_cond, spk_emb = model.get_conditioning_latents(
+                audio_path=[str(ref_path)],
+                gpt_cond_len=30,
+                max_ref_length=60,
+                sound_norm_refs=False,
+            )
+        finally:
+            import torchaudio as _ta
+            _ta.load = orig
+            if ref_path != reference_wav:
+                try:
+                    ref_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+
+        # Sanitise profile name for filename
+        safe = "".join(
+            c if (c.isalnum() or c in " _-") else "_"
+            for c in profile_name
+        ).strip() or "profile"
+        npz_path = profiles_dir / f"{safe}.npz"
+        self._save_npz_embeddings(npz_path, gpt_cond, spk_emb)
+
+        # Update registry
+        import json
+        reg_path = profiles_dir / "profiles.json"
+        registry: dict = {}
+        if reg_path.exists():
+            try:
+                registry = json.loads(reg_path.read_text())
+            except Exception:
+                pass
+        registry[profile_name] = str(npz_path)
+        reg_path.write_text(json.dumps(registry, indent=2))
+
+        return npz_path
+
+    @staticmethod
+    def list_speaker_profiles(profiles_dir: Path) -> dict:
+        """Return {name: npz_path_str} for all saved profiles."""
+        import json
+        reg = profiles_dir / "profiles.json"
+        if not reg.exists():
+            return {}
+        try:
+            data = json.loads(reg.read_text())
+            # Filter out entries whose .npz files no longer exist
+            return {k: v for k, v in data.items() if Path(v).exists()}
+        except Exception:
+            return {}
 
     # ── Single-chunk synthesis ───────────────────────────────────────────────
 
@@ -290,6 +523,7 @@ class TTSEngine:
         language: str = "en",
         output_format: str = "wav",
         reference_wav: Optional[Path] = None,
+        profile_npz: Optional[Path] = None,
         temp_dir: Optional[Path] = None,
         cancel_event: Optional[threading.Event] = None,
         on_chunk_start:    Optional[Callable[[int, int], None]]       = None,
@@ -304,8 +538,11 @@ class TTSEngine:
             stitch_chunks_to_file, export_mp3, cleanup_temp_directory
         )
 
-        # Determine if we're cloning
-        use_clone = voice_profile == "Custom (Clone)" and reference_wav is not None
+        # Determine if we're cloning (Custom Clone or saved profile)
+        use_clone = (
+            (voice_profile == "Custom (Clone)" and reference_wav is not None)
+            or profile_npz is not None
+        )
 
         if use_clone:
             try:
@@ -361,6 +598,7 @@ class TTSEngine:
                         output_path=chunk_path,
                         reference_wav=reference_wav,
                         language=language,
+                        profile_npz=profile_npz,
                     )
                 else:
                     self.synthesise_chunk(

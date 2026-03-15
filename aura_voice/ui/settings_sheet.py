@@ -19,7 +19,7 @@ from core.model_manager import MODEL_CATALOG, is_model_downloaded, load_config, 
 
 
 # ─── Sheet Background Color ────────────────────────────────────────────────────
-_SHEET_BG  = "#0E0C18"
+_SHEET_BG  = BG_DEEP
 _SHEET_W   = 360
 _SLIDE_MS  = 250
 _SLIDE_STEPS = 15
@@ -65,11 +65,8 @@ class SettingsSheet(ctk.CTkFrame):
 
         self._build()
 
-        # Start hidden off-screen right
-        parent.update_idletasks()
-        win_w = parent.winfo_width()
-        self.place(x=win_w, y=0, relheight=1.0)
-        self.lift()
+        # Start fully hidden — place() is called only when open() is invoked
+        self.place_forget()
 
     # ── Build ──────────────────────────────────────────────────────────────────
 
@@ -506,11 +503,11 @@ class SettingsSheet(ctk.CTkFrame):
         self._visible   = True
 
         self._parent.update_idletasks()
-        win_w   = self._parent.winfo_width()
+        win_w   = max(self._parent.winfo_width(), _SHEET_W + 10)
         start_x = win_w
         end_x   = win_w - _SHEET_W
 
-        # Ensure it's placed and visible
+        # Place off-screen right then animate in
         self.place(x=start_x, y=0, relheight=1.0)
         self.lift()
 

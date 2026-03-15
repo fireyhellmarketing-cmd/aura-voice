@@ -212,6 +212,7 @@ class AuraVoiceApp(ctk.CTk):
         self._main_view = MainView(body)
         self._main_view.grid(row=0, column=1, sticky="nsew")
         self._main_view.on_generate = self._start_synthesis
+        self._voice_panel.on_save_profile = self._save_voice_profile
 
         # Wave canvas
         from ui.wave_canvas import WaveCanvas
@@ -449,9 +450,11 @@ class AuraVoiceApp(ctk.CTk):
 
     def _bento_play(self):
         self._main_view._toggle_play()
+        self._wave_canvas.set_mode("playing")
 
     def _bento_stop(self):
         self._main_view._stop_playback()
+        self._wave_canvas.set_mode("idle")
 
     def _on_sidebar_nav(self, section: str):
         if section == "settings":
@@ -498,6 +501,45 @@ class AuraVoiceApp(ctk.CTk):
         self.after(2000, self._update_stats_bar)
 
     # ── Settings sheet ─────────────────────────────────────────────────────────
+
+    def _save_voice_profile(self, profile_name: str):
+        """Encode the current clone reference into a named speaker profile."""
+        ref = self._voice_panel.get_settings().get("clone_ref_path")
+        if not ref or not Path(ref).exists():
+            from tkinter import messagebox
+            messagebox.showwarning(
+                "No Reference Audio",
+                "Set a reference audio file in the Voice panel first.",
+            )
+            return
+        if not self._engine._xtts_loaded:
+            from tkinter import messagebox
+            messagebox.showwarning(
+                "XTTS Not Loaded",
+                "Generate one clone first so XTTS v2 is loaded, then save the profile.",
+            )
+            return
+
+        profiles_dir = Path.home() / "Documents" / "AuraVoice" / "profiles"
+        self._terminal.write(f"[Profile] Encoding '{profile_name}'...\n", "blue")
+
+        def _bg():
+            try:
+                npz = self._engine.encode_speaker_profile(
+                    Path(ref), profile_name, profiles_dir
+                )
+                self.after(0, lambda: self._on_profile_saved(profile_name, npz))
+            except Exception as exc:
+                self.after(0, lambda: self._terminal.write(
+                    f"[Profile] Error: {exc}\n", "red"
+                ))
+
+        import threading
+        threading.Thread(target=_bg, daemon=True).start()
+
+    def _on_profile_saved(self, name: str, npz_path: Path):
+        self._voice_panel.refresh_profiles()
+        self._terminal.write(f"[Profile] Saved '{name}' → {npz_path.name}\n", "green")
 
     def _toggle_settings(self):
         if self._settings_sheet.is_open():
@@ -750,6 +792,7 @@ class AuraVoiceApp(ctk.CTk):
         self._gen_start = __import__("time").time()
 
         self._main_view.set_generating(True)
+        self._wave_canvas.set_mode("generating")
         self._terminal.write(
             f"[Generate] Script: {len(script)} chars, {total} chunk(s)\n", "blue"
         )
@@ -757,6 +800,11 @@ class AuraVoiceApp(ctk.CTk):
         ref_wav = (
             Path(settings["clone_ref_path"])
             if settings.get("clone_ref_path")
+            else None
+        )
+        profile_npz = (
+            Path(settings["profile_npz_path"])
+            if settings.get("profile_npz_path")
             else None
         )
         lang_code = LANGUAGE_CODES.get(settings.get("language", "English"), "en")
@@ -771,6 +819,7 @@ class AuraVoiceApp(ctk.CTk):
                 language=lang_code,
                 output_format=settings["output_format"].lower(),
                 reference_wav=ref_wav,
+                profile_npz=profile_npz,
                 cancel_event=self._cancel,
                 on_chunk_start=lambda c, t:   self._q.put((_Q_CHUNK_START, (c, t))),
                 on_chunk_done= lambda c, t, e: self._q.put((_Q_CHUNK_DONE,  (c, t, e))),
@@ -861,11 +910,13 @@ class AuraVoiceApp(ctk.CTk):
             path: Path = payload
             self._last_output = path
             self._main_view.set_generating(False)
+            self._wave_canvas.set_mode("idle")
             self._terminal.write(f"[Generate] Done: {path}\n", "green")
             self._finalize_output(path)
 
         elif kind == _Q_ERROR:
             self._main_view.set_generating(False)
+            self._wave_canvas.set_mode("idle")
             self._terminal.write(f"[Generate] Error: {payload}\n", "red")
             messagebox.showerror("Synthesis Error", payload)
 
