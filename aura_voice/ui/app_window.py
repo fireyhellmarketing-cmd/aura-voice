@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import queue
 import re
 import subprocess
 import sys
 import threading
+import time
 from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox
@@ -44,30 +46,60 @@ _Q_COMPLETE     = "complete"
 _Q_ERROR        = "error"
 _Q_MODEL_STATUS = "model_status"
 _Q_DL_PROGRESS  = "dl_progress"
+_Q_STREAM_OUT   = "stream_out"   # captured stdout
+_Q_STREAM_ERR   = "stream_err"   # captured stderr
 
 
-# ─── Stderr interceptor ────────────────────────────────────────────────────────
+# ─── Stream capturer ───────────────────────────────────────────────────────────
 
-class _StderrCapture:
-    """Wraps sys.stderr; parses tqdm progress lines and posts to the UI queue."""
+# Patterns to suppress — pure tqdm noise, ANSI escapes, blank lines
+_NOISE_RE = re.compile(
+    r'^\s*$'                          # blank / whitespace only
+    r'|\x1b\['                        # ANSI escape sequences
+    r'|^\s*\d+%\|'                    # tqdm bar (e.g. " 45%|████  |")
+    r'|^\s*\r'                        # carriage-return lines
+    r'|it/s\]'                        # tqdm iteration-per-second suffix
+    r'|\[A$'                          # tqdm cursor-up
+)
+
+
+class _StreamCapture:
+    """
+    Wraps sys.stdout or sys.stderr.
+    - Forwards every write to the real underlying stream.
+    - Filters noisy tqdm/ANSI lines and posts meaningful text to the UI queue
+      as (_Q_STREAM_OUT, text) or (_Q_STREAM_ERR, text).
+    """
 
     _PCT_RE  = re.compile(r'(\d+)%')
     _SIZE_RE = re.compile(r'([\d.]+)([KMGT]?)iB/([\d.]+)([KMGT]?)iB')
     _UNITS   = {"": 1, "K": 1024, "M": 1024**2, "G": 1024**3, "T": 1024**4}
 
-    def __init__(self, ui_queue: queue.Queue):
-        self._q    = ui_queue
-        import io
-        self._real: io.TextIOBase = sys.__stderr__  # type: ignore[assignment]
+    def __init__(self, real_stream, ui_queue: queue.Queue, msg_type: str, parse_dl: bool = False):
+        self._real      = real_stream
+        self._q         = ui_queue
+        self._msg_type  = msg_type
+        self._parse_dl  = parse_dl   # True for stderr — extracts download %
 
     def write(self, text: str):
-        self._real.write(text)  # type: ignore[union-attr]
-        self._parse(text)
+        self._real.write(text)
+        if self._parse_dl:
+            self._extract_dl(text)
+        # Forward filtered text to terminal
+        stripped = text.strip()
+        if stripped and not _NOISE_RE.search(stripped):
+            # Truncate very long lines (e.g. stack traces)
+            line = stripped[:220] + ("…" if len(stripped) > 220 else "")
+            self._q.put((self._msg_type, line))
 
     def flush(self):
-        self._real.flush()  # type: ignore[union-attr]
+        self._real.flush()
 
-    def _parse(self, text: str):
+    def fileno(self):
+        return self._real.fileno()
+
+    def _extract_dl(self, text: str):
+        """Parse tqdm download progress lines → post _Q_DL_PROGRESS."""
         m = self._SIZE_RE.search(text)
         if m:
             done  = float(m.group(1)) * self._UNITS.get(m.group(2), 1)
@@ -78,6 +110,25 @@ class _StderrCapture:
         p = self._PCT_RE.search(text)
         if p:
             self._q.put((_Q_DL_PROGRESS, (int(p.group(1)), 100)))
+
+
+# ─── Logging handler ───────────────────────────────────────────────────────────
+
+class _TerminalLogHandler(logging.Handler):
+    """Routes Python logging records WARNING+ to the app's UI queue."""
+
+    def __init__(self, ui_queue: queue.Queue):
+        super().__init__(level=logging.WARNING)
+        self._q = ui_queue
+        self.setFormatter(logging.Formatter("[%(name)s] %(levelname)s: %(message)s"))
+
+    def emit(self, record: logging.LogRecord):
+        try:
+            msg = self.format(record).strip()
+            if msg and not _NOISE_RE.search(msg):
+                self._q.put((_Q_STREAM_ERR, msg[:220]))
+        except Exception:
+            pass
 
 
 # ─── Main Application Window ───────────────────────────────────────────────────
@@ -139,6 +190,17 @@ class AuraVoiceApp(ctk.CTk):
         self._build_ui()
         self._start_poll()
         self._start_stats_poll()
+
+        # ── Redirect stdout/stderr → terminal + install logging handler ──
+        self._stdout_cap = _StreamCapture(sys.__stdout__, self._q, _Q_STREAM_OUT, parse_dl=False)
+        self._stderr_cap = _StreamCapture(sys.__stderr__, self._q, _Q_STREAM_ERR, parse_dl=True)
+        sys.stdout = self._stdout_cap
+        sys.stderr = self._stderr_cap
+        self._log_handler = _TerminalLogHandler(self._q)
+        logging.getLogger().addHandler(self._log_handler)
+
+        # Download-progress tracking (for terminal % milestones)
+        self._last_dl_pct: float = -1.0
 
         # Load model after window is ready
         self.after(400, self._check_model)
@@ -729,9 +791,6 @@ class AuraVoiceApp(ctk.CTk):
             f"[System] Downloading {model_name} (~{size_gb} GB)...\n", "blue"
         )
 
-        capture = _StderrCapture(self._q)
-        sys.stderr = capture
-
         def _dl():
             try:
                 self._engine.load_model(
@@ -740,8 +799,6 @@ class AuraVoiceApp(ctk.CTk):
                 self._q.put((_Q_MODEL_STATUS, "__done__"))
             except Exception as exc:
                 self._q.put((_Q_MODEL_STATUS, f"__error__{exc}"))
-            finally:
-                sys.stderr = sys.__stderr__
 
         threading.Thread(target=_dl, daemon=True).start()
 
@@ -895,6 +952,7 @@ class AuraVoiceApp(ctk.CTk):
                     text=f"  {payload[:28]}  ",
                     text_color=WARNING,
                 )
+                self._terminal.write(f"[Model] {payload}\n", "blue")
 
         elif kind == _Q_DL_PROGRESS:
             done, total = payload
@@ -903,40 +961,63 @@ class AuraVoiceApp(ctk.CTk):
                 text=f"  {pct:.0f}%  ",
                 text_color=WARNING,
             )
+            # Log every 10% milestone
+            if int(pct / 10) > int(self._last_dl_pct / 10):
+                done_mb  = done  / 1024**2
+                total_mb = total / 1024**2
+                self._terminal.write(
+                    f"[Download] {pct:.0f}%  ({done_mb:.0f} / {total_mb:.0f} MB)\n", "yellow"
+                )
+            self._last_dl_pct = pct
 
         elif kind == _Q_CHUNK_START:
             c, t = payload
             self._gen_done = c - 1
-            self._terminal.write(f"  chunk {c}/{t}\n", "green")
+            self._terminal.write(f"[Chunk {c}/{t}] Synthesizing...\n", "green")
             self._main_view.update_chunk_progress(c, t, 0.0)
 
         elif kind == _Q_CHUNK_DONE:
             c, t, eta = payload
             self._gen_done = c
+            elapsed = time.time() - self._gen_start if self._gen_start else 0.0
+            eta_str = f"ETA {eta:.0f}s" if eta > 0 else "last chunk"
+            self._terminal.write(
+                f"[Chunk {c}/{t}] Done · {elapsed:.1f}s elapsed · {eta_str}\n", "grey"
+            )
             self._main_view.update_chunk_progress(c, t, eta)
 
         elif kind == _Q_STITCH_START:
-            self._terminal.write("[Generate] Stitching audio...\n", "blue")
+            self._terminal.write(f"[Stitch] Joining {self._gen_total} chunk(s)...\n", "blue")
 
         elif kind == _Q_STITCH_PROG:
-            pass  # no separate progress bar in bento layout
+            c, t = payload
+            self._terminal.write(f"[Stitch] {c}/{t}\n", "grey")
 
         elif kind == _Q_EXPORT_START:
-            self._terminal.write(f"[Generate] Exporting {payload}...\n", "blue")
+            self._terminal.write(f"[Export] Writing {payload}...\n", "blue")
 
         elif kind == _Q_COMPLETE:
             path: Path = payload
             self._last_output = path
+            elapsed = time.time() - self._gen_start if self._gen_start else 0.0
             self._main_view.set_generating(False)
             self._wave_canvas.set_mode("idle")
-            self._terminal.write(f"[Generate] Done: {path}\n", "green")
+            self._terminal.write(
+                f"[Done] {path.name}  ({elapsed:.1f}s total)\n", "green"
+            )
             self._finalize_output(path)
 
         elif kind == _Q_ERROR:
             self._main_view.set_generating(False)
             self._wave_canvas.set_mode("idle")
-            self._terminal.write(f"[Generate] Error: {payload}\n", "red")
+            self._terminal.write(f"[Error] {payload}\n", "red")
             messagebox.showerror("Synthesis Error", payload)
+
+        elif kind == _Q_STREAM_OUT:
+            self._terminal.write(payload + "\n", "grey")
+
+        elif kind == _Q_STREAM_ERR:
+            self._terminal.write(payload + "\n", "yellow")
 
     # ── Output finalization ────────────────────────────────────────────────────
 

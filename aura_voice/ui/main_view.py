@@ -783,6 +783,7 @@ class MainView(ctk.CTkFrame):
         import threading
         def _run():
             try:
+                print(f"[Audio] Analyzing: {Path(path).name}")
                 import wave as _wave
                 import numpy as np
                 with _wave.open(str(path), "rb") as wf:
@@ -805,7 +806,10 @@ class MainView(ctk.CTkFrame):
                     envelope.append(min(1.0, rms * 2.5))   # boost quiet audio
                 self._audio_envelope    = envelope
                 self._audio_envelope_dt = 0.04
-            except Exception:
+                dur_s = len(envelope) * 0.04
+                print(f"[Audio] Ready · {len(envelope)} frames · {dur_s:.1f}s")
+            except Exception as exc:
+                print(f"[Audio] Analysis failed: {exc}")
                 self._audio_envelope = []
         threading.Thread(target=_run, daemon=True).start()
 
