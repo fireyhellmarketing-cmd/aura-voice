@@ -1,5 +1,10 @@
 """
-AURA VOICE — TTS engine: Coqui XTTS v2 wrapper, text chunking, and synthesis pipeline.
+AURA VOICE — TTS engine: Coqui VITS (VCTK) wrapper, text chunking, and synthesis pipeline.
+
+Primary model : tts_models/en/vctk/vits
+ - 109 English speakers, fast VITS architecture
+ - Real-time factor ~0.13 (very fast, even on CPU)
+ - Requires espeak-ng:  brew install espeak-ng  (macOS)
 """
 
 from __future__ import annotations
@@ -9,42 +14,37 @@ import threading
 import tempfile
 import time
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
 
-MODEL_NAME = "tts_models/multilingual/multi-dataset/xtts_v2"
+MODEL_NAME = "tts_models/en/vctk/vits"
 
-CHUNK_TARGET_WORDS  = 175   # aim for this many words per chunk
-CHUNK_MAX_WORDS     = 220   # hard upper limit before forcing a split
+CHUNK_TARGET_WORDS = 100   # VITS handles shorter chunks best
+CHUNK_MAX_WORDS    = 150
 
-# XTTS v2 is a voice-cloning model — it does NOT support style/emotion
-# conditioning via text prefixes.  All prefixes are empty; the "delivery
-# style" setting is stored for metadata only and does not alter synthesis.
-EMOTION_PREFIXES: Dict[str, str] = {
-    "Neutral":                "",
-    "Happy & Upbeat":         "",
-    "Serious & Authoritative":"",
-    "Sad & Reflective":       "",
-    "Excited & Enthusiastic": "",
-    "Calm & Meditative":      "",
-}
-
-# Maps our friendly voice-profile names to XTTS v2 speaker IDs.
-# The model ships with a set of built-in speaker embeddings; these are the
-# most natural-sounding ones for each persona.
+# Friendly voice profile name → VCTK speaker ID
+# Chosen for clarity and naturalness across the 109-speaker set.
 VOICE_PROFILES: Dict[str, str] = {
-    "Natural Female":        "Claribel Dervla",
-    "Natural Male":          "Craig Gutsy",
-    "Warm & Friendly":       "Daisy Studious",
-    "Professional Narrator": "Andrew Chipper",
-    "Energetic & Upbeat":    "Sofia Hellen",
-    "Calm & Soothing":       "Gracie Wise",
-    "Custom Voice Clone":    "__custom__",
+    "Natural Female":        "p225",   # clear, neutral British female
+    "Natural Male":          "p226",   # clear, neutral British male
+    "Warm & Friendly":       "p270",   # warm female
+    "Professional Narrator": "p236",   # authoritative female
+    "Energetic & Upbeat":    "p248",   # bright, expressive female
+    "Calm & Soothing":       "p245",   # calm male
+    "Deep Male Voice":       "p260",   # deeper male voice
+    "Young Female":          "p330",   # young female
 }
 
+# Kept for UI compatibility — VITS doesn't use emotion conditioning
+EMOTION_PREFIXES: Dict[str, str] = {k: "" for k in [
+    "Neutral", "Happy & Upbeat", "Serious & Authoritative",
+    "Sad & Reflective", "Excited & Enthusiastic", "Calm & Meditative",
+]}
+
+# Language codes (kept for UI; VITS model is English-only)
 LANGUAGE_CODES: Dict[str, str] = {
     "English":    "en",
     "Spanish":    "es",
@@ -62,9 +62,6 @@ LANGUAGE_CODES: Dict[str, str] = {
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _split_into_sentences(text: str) -> List[str]:
-    """
-    Split text into sentences.  Tries NLTK first; falls back to a robust regex.
-    """
     try:
         import nltk
         try:
@@ -74,52 +71,36 @@ def _split_into_sentences(text: str) -> List[str]:
             nltk.download("punkt_tab", quiet=True)
             return nltk.sent_tokenize(text)
     except Exception:
-        # Fallback: split on sentence-ending punctuation followed by whitespace
         raw = re.split(r'(?<=[.!?])\s+', text.strip())
         return [s.strip() for s in raw if s.strip()]
 
 
 def chunk_text(text: str, target_words: int = CHUNK_TARGET_WORDS) -> List[str]:
-    """
-    Split *text* into chunks of approximately *target_words* words, never
-    cutting mid-sentence.
-
-    Returns:
-        A list of text strings, each roughly target_words words long.
-    """
     sentences = _split_into_sentences(text)
     chunks: List[str] = []
-    current_sentences: List[str] = []
-    current_word_count = 0
+    current: List[str] = []
+    current_wc = 0
 
     for sentence in sentences:
-        word_count = len(sentence.split())
-
-        # If a single sentence is enormous, break it at commas / semicolons
-        if word_count > CHUNK_MAX_WORDS:
-            sub_parts = re.split(r'(?<=[,;:])\s+', sentence)
-            for part in sub_parts:
-                part_wc = len(part.split())
-                if current_word_count + part_wc >= target_words and current_sentences:
-                    chunks.append(" ".join(current_sentences))
-                    current_sentences = [part]
-                    current_word_count = part_wc
+        wc = len(sentence.split())
+        if wc > CHUNK_MAX_WORDS:
+            sub = re.split(r'(?<=[,;:])\s+', sentence)
+            for part in sub:
+                pwc = len(part.split())
+                if current_wc + pwc >= target_words and current:
+                    chunks.append(" ".join(current))
+                    current = [part]; current_wc = pwc
                 else:
-                    current_sentences.append(part)
-                    current_word_count += part_wc
+                    current.append(part); current_wc += pwc
             continue
-
-        if current_word_count + word_count >= target_words and current_sentences:
-            chunks.append(" ".join(current_sentences))
-            current_sentences = [sentence]
-            current_word_count = word_count
+        if current_wc + wc >= target_words and current:
+            chunks.append(" ".join(current))
+            current = [sentence]; current_wc = wc
         else:
-            current_sentences.append(sentence)
-            current_word_count += word_count
+            current.append(sentence); current_wc += wc
 
-    if current_sentences:
-        chunks.append(" ".join(current_sentences))
-
+    if current:
+        chunks.append(" ".join(current))
     return [c.strip() for c in chunks if c.strip()]
 
 
@@ -129,25 +110,25 @@ def chunk_text(text: str, target_words: int = CHUNK_TARGET_WORDS) -> List[str]:
 
 class TTSEngine:
     """
-    Wrapper around Coqui TTS / XTTS v2.
+    Wrapper around Coqui TTS / VCTK VITS.
 
     Lifecycle
     ---------
-    1.  Call ``is_model_cached()`` to check if the model is already on disk.
-    2.  Call ``load_model()`` (blocks; run in a thread) to initialise the model.
-    3.  Call ``synthesise()`` to run the full pipeline asynchronously.
+    1. is_model_cached() — check if already downloaded
+    2. load_model()      — blocking; run in a thread
+    3. synthesise()      — full pipeline
     """
 
     def __init__(self) -> None:
-        self._tts = None
+        self._tts          = None
         self._model_loaded = False
-        self._lock = threading.Lock()
+        self._lock         = threading.Lock()
 
     # ── Model helpers ────────────────────────────────────────────────────────
 
     @staticmethod
     def is_model_cached() -> bool:
-        """Return True if the XTTS v2 model is fully downloaded on disk (>1.8 GB)."""
+        """Return True if the VCTK VITS model is downloaded (>100 MB)."""
         slug = MODEL_NAME.replace("/", "--")
         candidates = [
             Path.home() / "Library" / "Application Support" / "tts" / slug,
@@ -157,11 +138,8 @@ class TTSEngine:
         for d in candidates:
             if d.exists():
                 try:
-                    total_bytes = sum(
-                        f.stat().st_size for f in d.rglob("*") if f.is_file()
-                    )
-                    # Full model is ~1.87 GB — treat as cached if >1.8 GB present
-                    if total_bytes > 1_800_000_000:
+                    total = sum(f.stat().st_size for f in d.rglob("*") if f.is_file())
+                    if total > 100_000_000:   # >100 MB
                         return True
                 except Exception:
                     pass
@@ -171,25 +149,19 @@ class TTSEngine:
         self,
         progress_callback: Optional[Callable[[str], None]] = None,
     ) -> None:
-        """
-        Initialise the TTS model.  Downloads it if not cached.
-        This is a blocking call — run it in a background thread.
-        """
+        """Initialise the TTS model (blocking — run in a background thread)."""
         try:
-            import torch
             import os
             os.environ.setdefault("COQUI_TOS_AGREED", "1")
             from TTS.api import TTS
 
-            device = "mps" if torch.backends.mps.is_available() else "cpu"
-
             if progress_callback:
-                progress_callback(f"Loading model on device: {device} …")
+                progress_callback("Loading VITS model…")
 
-            tts_instance = TTS(MODEL_NAME, gpu=False).to(device)
+            tts_instance = TTS(MODEL_NAME, gpu=False)
 
             with self._lock:
-                self._tts = tts_instance
+                self._tts          = tts_instance
                 self._model_loaded = True
 
             if progress_callback:
@@ -206,7 +178,6 @@ class TTSEngine:
             return self._model_loaded
 
     def get_available_speakers(self) -> List[str]:
-        """Return the list of built-in speaker IDs from the loaded model."""
         with self._lock:
             if self._tts is None:
                 return []
@@ -222,49 +193,23 @@ class TTSEngine:
         text: str,
         output_path: Path,
         speaker: str,
-        language: str = "en",
         speed: float = 1.0,
-        reference_wav: Optional[Path] = None,
     ) -> None:
-        """
-        Synthesise a single text chunk and write it to *output_path* as WAV.
-
-        Args:
-            text:          The text to synthesise.
-            output_path:   Where to save the WAV file.
-            speaker:       Speaker ID (or "__custom__" for voice cloning).
-            language:      ISO 639-1 language code, e.g. "en".
-            speed:         Speaking rate multiplier (0.5 – 2.0).
-            reference_wav: Path to reference WAV for voice cloning (required when
-                           speaker == "__custom__").
-        """
+        """Synthesise one text chunk → WAV file."""
         with self._lock:
             tts = self._tts
-
         if tts is None:
-            raise RuntimeError("TTS model is not loaded. Call load_model() first.")
+            raise RuntimeError("Model not loaded.")
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
-
         try:
-            if speaker == "__custom__":
-                if reference_wav is None or not reference_wav.exists():
-                    raise ValueError("A reference WAV file is required for voice cloning.")
-                tts.tts_to_file(
-                    text=text,
-                    speaker_wav=str(reference_wav),
-                    language=language,
-                    file_path=str(output_path),
-                    speed=speed,
-                )
-            else:
-                tts.tts_to_file(
-                    text=text,
-                    speaker=speaker,
-                    language=language,
-                    file_path=str(output_path),
-                    speed=speed,
-                )
+            # Clamp speed: VITS supports via length_scale (inverse of speed)
+            tts.tts_to_file(
+                text=text,
+                speaker=speaker,
+                file_path=str(output_path),
+                speed=speed,
+            )
         except Exception as exc:
             raise RuntimeError(f"Synthesis failed for chunk: {exc}") from exc
 
@@ -282,102 +227,66 @@ class TTSEngine:
         reference_wav: Optional[Path] = None,
         temp_dir: Optional[Path] = None,
         cancel_event: Optional[threading.Event] = None,
-        on_chunk_start: Optional[Callable[[int, int], None]] = None,
-        on_chunk_done: Optional[Callable[[int, int, float], None]] = None,
-        on_stitch_start: Optional[Callable[[], None]] = None,
-        on_stitch_progress: Optional[Callable[[int, int], None]] = None,
-        on_export_start: Optional[Callable[[str], None]] = None,
-        on_complete: Optional[Callable[[Path], None]] = None,
-        on_error: Optional[Callable[[str], None]] = None,
+        on_chunk_start:    Optional[Callable[[int, int], None]]       = None,
+        on_chunk_done:     Optional[Callable[[int, int, float], None]] = None,
+        on_stitch_start:   Optional[Callable[[], None]]               = None,
+        on_stitch_progress:Optional[Callable[[int, int], None]]       = None,
+        on_export_start:   Optional[Callable[[str], None]]            = None,
+        on_complete:       Optional[Callable[[Path], None]]           = None,
+        on_error:          Optional[Callable[[str], None]]            = None,
     ) -> Optional[Path]:
-        """
-        Full synthesis pipeline:
+        from core.audio_utils import stitch_chunks, export_wav, export_mp3, cleanup_temp_directory
 
-        1. Chunk the input text.
-        2. Synthesise each chunk to a temp WAV.
-        3. Stitch all chunks together (with 300 ms silence between them).
-        4. Export the final file as WAV or MP3.
+        speaker_id = VOICE_PROFILES.get(voice_profile, "p225")
+        chunks     = chunk_text(text)
+        total      = len(chunks)
 
-        All *on_*  callbacks are invoked from this thread (caller is responsible
-        for routing them to the UI thread via queue if needed).
-
-        Returns the final output path on success, or None on failure/cancel.
-        """
-        from core.audio_utils import (
-            stitch_chunks, export_wav, export_mp3, cleanup_temp_directory
-        )
-
-        # ── Prepare ──────────────────────────────────────────────────────────
-        speaker_id = VOICE_PROFILES.get(voice_profile, "Claribel Dervla")
-        emotion_prefix = EMOTION_PREFIXES.get(emotion, "")
-        lang_code = LANGUAGE_CODES.get(language, "en")
-
-        chunks = chunk_text(text)
-        total_chunks = len(chunks)
-
-        if total_chunks == 0:
+        if total == 0:
             if on_error:
                 on_error("No text to synthesise.")
             return None
 
-        # ── Temp directory ────────────────────────────────────────────────────
-        owns_temp_dir = temp_dir is None
-        if owns_temp_dir:
+        owns_temp = temp_dir is None
+        if owns_temp:
             temp_dir = Path(tempfile.mkdtemp(prefix="aura_voice_"))
 
         chunk_paths: List[Path] = []
-
         try:
-            # ── Synthesise chunks ─────────────────────────────────────────────
             chunk_times: List[float] = []
             for idx, chunk in enumerate(chunks):
                 if cancel_event and cancel_event.is_set():
                     return None
-
                 if on_chunk_start:
-                    on_chunk_start(idx + 1, total_chunks)
+                    on_chunk_start(idx + 1, total)
 
-                conditioned_text = emotion_prefix + chunk
                 chunk_path = temp_dir / f"chunk_{idx + 1:04d}.wav"
                 t0 = time.perf_counter()
-
                 self.synthesise_chunk(
-                    text=conditioned_text,
+                    text=chunk,
                     output_path=chunk_path,
                     speaker=speaker_id,
-                    language=lang_code,
                     speed=speed,
-                    reference_wav=reference_wav,
                 )
-
                 elapsed = time.perf_counter() - t0
                 chunk_times.append(elapsed)
                 chunk_paths.append(chunk_path)
 
-                avg_time = sum(chunk_times) / len(chunk_times)
-                eta_seconds = avg_time * (total_chunks - (idx + 1))
-
+                avg  = sum(chunk_times) / len(chunk_times)
+                eta  = avg * (total - (idx + 1))
                 if on_chunk_done:
-                    on_chunk_done(idx + 1, total_chunks, eta_seconds)
+                    on_chunk_done(idx + 1, total, eta)
 
             if cancel_event and cancel_event.is_set():
                 return None
 
-            # ── Stitch ────────────────────────────────────────────────────────
             if on_stitch_start:
                 on_stitch_start()
-
-            combined = stitch_chunks(
-                chunk_paths,
-                progress_callback=on_stitch_progress,
-            )
+            combined = stitch_chunks(chunk_paths, progress_callback=on_stitch_progress)
 
             if cancel_event and cancel_event.is_set():
                 return None
 
-            # ── Export ────────────────────────────────────────────────────────
             output_path.parent.mkdir(parents=True, exist_ok=True)
-
             if output_format.lower() == "mp3":
                 final_path = output_path.with_suffix(".mp3")
                 if on_export_start:
@@ -391,14 +300,12 @@ class TTSEngine:
 
             if on_complete:
                 on_complete(final_path)
-
             return final_path
 
         except Exception as exc:
             if on_error:
                 on_error(str(exc))
             return None
-
         finally:
-            if owns_temp_dir:
+            if owns_temp:
                 cleanup_temp_directory(temp_dir)

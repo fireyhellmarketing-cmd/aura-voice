@@ -166,10 +166,14 @@ class OutputPanel(ctk.CTkFrame):
         self._playing = False
         self._ctk_image: Optional[ctk.CTkImage]  = None
 
-        # Playback
-        self._play_thread:   Optional[threading.Thread]  = None
-        self._play_proc:     Optional[object]             = None  # subprocess.Popen
-        self._stop_event     = threading.Event()
+        # Playback state
+        self._play_thread:    Optional[threading.Thread] = None
+        self._play_proc:      Optional[object]           = None
+        self._stop_event      = threading.Event()
+        self._paused:         bool = False
+        self._play_start_ms:  float = 0.0
+        self._play_offset_ms: int   = 0
+        self._play_duration:  int   = 0
 
         self._build()
 
@@ -348,21 +352,74 @@ class OutputPanel(ctk.CTkFrame):
         self._waveform = _WaveformWidget(right, width=340, height=52)
         self._waveform.pack(anchor="w", pady=(8, 0))
 
+        # ── In-app player ──
+        player_frame = ctk.CTkFrame(right, fg_color="transparent")
+        player_frame.pack(fill="x", pady=(PAD["md"], 0))
+
+        # Progress bar
+        self._player_bar = ctk.CTkProgressBar(
+            player_frame,
+            height=6,
+            fg_color=PANEL,
+            progress_color=ACCENT,
+            corner_radius=3,
+        )
+        self._player_bar.set(0)
+        self._player_bar.pack(fill="x", pady=(0, 4))
+
+        # Time label + controls row
+        ctrl_row = ctk.CTkFrame(player_frame, fg_color="transparent")
+        ctrl_row.pack(fill="x")
+
+        # Play/Pause button
+        self._play_overlay.configure(text="▶")   # keep overlay in sync
+        ctk.CTkButton(
+            ctrl_row,
+            text="▶",
+            width=38, height=32,
+            fg_color=ACCENT,
+            hover_color=ACCENT_HOVER,
+            text_color=TEXT,
+            corner_radius=RADIUS["md"],
+            font=(FONTS["base"][0], 14),
+            command=self._toggle_play,
+        ).pack(side="left", padx=(0, 4))
+
+        ctk.CTkButton(
+            ctrl_row,
+            text="⏹",
+            width=38, height=32,
+            fg_color=CARD,
+            hover_color=CARD_HOVER,
+            text_color=TEXT_SUB,
+            border_color=BORDER,
+            border_width=1,
+            corner_radius=RADIUS["md"],
+            font=(FONTS["base"][0], 13),
+            command=self._stop_playback,
+        ).pack(side="left", padx=(0, 8))
+
+        self._player_time = ctk.CTkLabel(
+            ctrl_row,
+            text=f"0:00 / {self._fmt_ms(self._get_duration_ms(rec.audio_path))}",
+            font=FONTS["mono_xs"],
+            text_color=TEXT_MUTED,
+        )
+        self._player_time.pack(side="left")
+
         # Action buttons
         action_row = ctk.CTkFrame(right, fg_color="transparent")
-        action_row.pack(anchor="w", pady=(PAD["md"], 0), fill="x")
+        action_row.pack(anchor="w", pady=(PAD["sm"], 0), fill="x")
 
         buttons = [
-            ("▶  Play",   self._toggle_play,   ACCENT,   ACCENT_HOVER),
-            ("⬇  Save",   self._do_save,        "#252540", CARD_HOVER),
-            ("🗑  Delete", self._do_delete,      "#252540", "#450a0a"),
-            ("♡  Fave",   self._do_favourite,   "#252540", CARD_HOVER),
+            ("⬇  Save",   self._do_save,      "#252540", CARD_HOVER),
+            ("🗑  Delete", self._do_delete,    "#252540", "#450a0a"),
         ]
         for label, cmd, fg, hov in buttons:
             ctk.CTkButton(
                 action_row,
                 text=label,
-                height=34, width=90,
+                height=30, width=90,
                 fg_color=fg,
                 hover_color=hov,
                 text_color=TEXT_SUB,
@@ -408,38 +465,99 @@ class OutputPanel(ctk.CTkFrame):
         except Exception as exc:
             print(f"[OutputPanel] Thumbnail load error: {exc}")
 
-    # ── Playback ───────────────────────────────────────────────────────────────
+    # ── Playback (pygame-based in-app player) ──────────────────────────────────
+
+    def _pygame_init(self) -> bool:
+        """Initialise pygame.mixer once; return True on success."""
+        try:
+            import pygame
+            if not pygame.mixer.get_init():
+                pygame.mixer.init(frequency=22050, size=-16, channels=1, buffer=512)
+            return True
+        except Exception as exc:
+            print(f"[Player] pygame init failed: {exc}")
+            return False
+
+    def _get_duration_ms(self, path: Path) -> int:
+        """Return audio duration in milliseconds."""
+        try:
+            from pydub import AudioSegment
+            return len(AudioSegment.from_file(str(path)))
+        except Exception:
+            return 0
 
     def _toggle_play(self):
         if self._playing:
-            self._stop_playback()
+            self._pause_playback()
         else:
             self._start_playback()
 
     def _start_playback(self):
         if not self._current:
             return
-        self._playing = True
+        if not self._current.audio_path.exists():
+            return
+
+        if not self._pygame_init():
+            return
+
+        import pygame
+        try:
+            pygame.mixer.music.load(str(self._current.audio_path))
+            pygame.mixer.music.play()
+        except Exception as exc:
+            print(f"[Player] load/play error: {exc}")
+            return
+
+        self._playing        = True
+        self._paused         = False
+        self._play_start_ms  = time.time() * 1000
+        self._play_offset_ms = 0
+        self._play_duration  = self._get_duration_ms(self._current.audio_path)
         self._stop_event.clear()
 
         if hasattr(self, "_play_overlay"):
-            self._play_overlay.configure(text="⏹")
+            self._play_overlay.configure(text="⏸")
         if hasattr(self, "_waveform"):
             self._waveform.start_animation()
 
-        self._play_thread = threading.Thread(
-            target=self._playback_thread,
-            args=(self._current.audio_path,),
-            daemon=True,
-        )
-        self._play_thread.start()
+        self._tick_player()
 
         if self.on_play:
             self.on_play(self._current.audio_path)
 
+    def _pause_playback(self):
+        import pygame
+        if not self._playing:
+            return
+        if getattr(self, "_paused", False):
+            # Resume
+            pygame.mixer.music.unpause()
+            self._paused        = False
+            self._play_start_ms = time.time() * 1000 - self._play_offset_ms
+            if hasattr(self, "_play_overlay"):
+                self._play_overlay.configure(text="⏸")
+            if hasattr(self, "_waveform"):
+                self._waveform.start_animation()
+        else:
+            # Pause
+            pygame.mixer.music.pause()
+            self._play_offset_ms = int(time.time() * 1000 - self._play_start_ms)
+            self._paused = True
+            if hasattr(self, "_play_overlay"):
+                self._play_overlay.configure(text="▶")
+            if hasattr(self, "_waveform"):
+                self._waveform.stop_animation()
+
     def _stop_playback(self):
-        self._stop_event.set()
-        self._playing = False
+        try:
+            import pygame
+            pygame.mixer.music.stop()
+        except Exception:
+            pass
+        self._playing        = False
+        self._paused         = False
+        self._play_offset_ms = 0
         if self._play_proc is not None:
             try:
                 self._play_proc.terminate()
@@ -450,43 +568,44 @@ class OutputPanel(ctk.CTkFrame):
             self._play_overlay.configure(text="▶")
         if hasattr(self, "_waveform"):
             self._waveform.stop_animation()
+        # Reset progress bar + time
+        if hasattr(self, "_player_bar"):
+            try:
+                self._player_bar.set(0)
+                self._player_time.configure(text="0:00 / " + self._fmt_ms(getattr(self, "_play_duration", 0)))
+            except Exception:
+                pass
 
-    def _playback_thread(self, path: Path):
-        """Play audio file in background thread."""
-        import subprocess, sys as _sys
+    def _tick_player(self):
+        """Poll playback position every 200ms and update the progress bar."""
+        if not self._playing or getattr(self, "_paused", False):
+            return
         try:
-            if _sys.platform == "darwin":
-                proc = subprocess.Popen(
-                    ["afplay", str(path)],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-                self._play_proc = proc
-                while proc.poll() is None:
-                    if self._stop_event.is_set():
-                        proc.terminate()
-                        break
-                    time.sleep(0.05)
-            elif _sys.platform == "win32":
-                import winsound
-                winsound.PlaySound(str(path), winsound.SND_FILENAME)
-            else:
-                proc = subprocess.Popen(
-                    ["aplay", str(path)],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-                self._play_proc = proc
-                while proc.poll() is None:
-                    if self._stop_event.is_set():
-                        proc.terminate()
-                        break
-                    time.sleep(0.05)
-        except Exception as exc:
-            print(f"[OutputPanel] Playback error: {exc}")
-        finally:
-            self._play_proc = None
-            self.after(0, self._stop_playback)
+            import pygame
+            if not pygame.mixer.music.get_busy():
+                # Finished naturally
+                self.after(0, self._stop_playback)
+                return
+            elapsed = int(time.time() * 1000 - self._play_start_ms)
+            dur     = getattr(self, "_play_duration", 0)
+            if dur > 0:
+                frac = min(elapsed / dur, 1.0)
+                if hasattr(self, "_player_bar"):
+                    self._player_bar.set(frac)
+                if hasattr(self, "_player_time"):
+                    self._player_time.configure(
+                        text=f"{self._fmt_ms(elapsed)} / {self._fmt_ms(dur)}"
+                    )
+        except Exception:
+            pass
+        self.after(200, self._tick_player)
+
+    @staticmethod
+    def _fmt_ms(ms: int) -> str:
+        s    = ms // 1000
+        mins = s // 60
+        secs = s  % 60
+        return f"{mins}:{secs:02d}"
 
     # ── Save / Delete / Favourite ──────────────────────────────────────────────
 

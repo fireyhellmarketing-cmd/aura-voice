@@ -12,13 +12,33 @@ from .hardware_detect import HardwareInfo
 # ─── Model Catalog ─────────────────────────────────────────────────────────────
 
 MODEL_CATALOG: Dict[str, Dict[str, Any]] = {
+    "VCTK VITS — Fast English (Default)": {
+        "model_id":             "tts_models/en/vctk/vits",
+        "size_gb":              0.15,
+        "quality":              5,
+        "quality_label":        "★★★★★",
+        "supports_cloning":     False,
+        "supports_emotions":    False,
+        "hardware":             ["cpu", "cuda", "mps"],
+        "min_ram_gb":           2,
+        "recommended_vram_gb":  0,
+        "languages":            ["English"],
+        "description": (
+            "Best quality English TTS. 109 natural-sounding speakers. "
+            "Extremely fast (~0.13x real-time). Works great on CPU. "
+            "Requires espeak-ng: brew install espeak-ng"
+        ),
+        "recommended": True,
+        "tag": "BEST",
+    },
+
     "XTTS v2 — Multilingual Pro": {
         "model_id":             "tts_models/multilingual/multi-dataset/xtts_v2",
         "size_gb":              1.87,
-        "quality":              5,
-        "quality_label":        "★★★★★",
+        "quality":              4,
+        "quality_label":        "★★★★☆",
         "supports_cloning":     True,
-        "supports_emotions":    True,
+        "supports_emotions":    False,
         "hardware":             ["cuda", "mps", "cpu"],
         "min_ram_gb":           8,
         "recommended_vram_gb":  4,
@@ -28,12 +48,11 @@ MODEL_CATALOG: Dict[str, Dict[str, Any]] = {
             "Turkish", "Korean", "Japanese", "Chinese",
         ],
         "description": (
-            "Best quality. Multilingual with 14 languages. "
-            "Voice cloning from a short audio sample. "
-            "Slow on CPU — GPU/MPS strongly recommended."
+            "Multilingual with 14 languages + voice cloning. "
+            "Slow on CPU — GPU/MPS recommended. 1.87 GB download."
         ),
-        "recommended": True,
-        "tag": "BEST",
+        "recommended": False,
+        "tag": "MULTILINGUAL",
     },
 
     "YourTTS — Fast Multilingual": {
