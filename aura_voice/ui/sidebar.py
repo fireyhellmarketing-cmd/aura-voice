@@ -1,6 +1,7 @@
 """AURA VOICE — Left icon sidebar with navigation and tooltips."""
 
 import customtkinter as ctk
+from pathlib import Path
 from typing import Callable, Optional
 
 from assets.styles import (
@@ -12,15 +13,28 @@ from assets.styles import (
     SIDEBAR_WIDTH,
 )
 
+_ASSETS = Path(__file__).resolve().parent.parent / "assets"
+
 
 # ─── Nav Items ─────────────────────────────────────────────────────────────────
+# Icons match the design sheet: waveform-A / doc / history-clock / gear / profile
 
 NAV_ITEMS = [
     ("generate",  "◈",  "Generate"),
     ("history",   "◷",  "History"),
     ("settings",  "⚙",  "Settings"),
-    ("about",     "⊕",  "About"),
+    ("about",     "◯",  "About"),
 ]
+
+
+def _load_ctk_image(path: Path, size: tuple) -> Optional[ctk.CTkImage]:
+    """Load a PNG as a CTkImage, returns None if file missing or Pillow fails."""
+    try:
+        from PIL import Image
+        img = Image.open(str(path)).convert("RGBA")
+        return ctk.CTkImage(light_image=img, dark_image=img, size=size)
+    except Exception:
+        return None
 
 
 # ─── Tooltip ───────────────────────────────────────────────────────────────────
@@ -104,13 +118,25 @@ class Sidebar(ctk.CTkFrame):
         logo_frame.pack(fill="x")
         logo_frame.pack_propagate(False)
 
-        # "A" monogram
-        ctk.CTkLabel(
-            logo_frame,
-            text="◈",
-            font=(FONTS["xl"][0], 24),
-            text_color=ACCENT,
-        ).place(relx=0.5, rely=0.5, anchor="center")
+        # Try logo.png first, fall back to icon.png, then text glyph
+        logo_img = (
+            _load_ctk_image(_ASSETS / "logo.png",  (36, 36)) or
+            _load_ctk_image(_ASSETS / "icon.png",  (36, 36))
+        )
+        if logo_img:
+            ctk.CTkLabel(
+                logo_frame,
+                text="",
+                image=logo_img,
+                fg_color="transparent",
+            ).place(relx=0.5, rely=0.5, anchor="center")
+        else:
+            ctk.CTkLabel(
+                logo_frame,
+                text="◈",
+                font=(FONTS["xl"][0], 24),
+                text_color=ACCENT,
+            ).place(relx=0.5, rely=0.5, anchor="center")
 
         # Thin separator
         ctk.CTkFrame(self, fg_color=BORDER, height=1).pack(fill="x")

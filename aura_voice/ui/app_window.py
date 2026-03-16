@@ -186,6 +186,21 @@ class AuraVoiceApp(ctk.CTk):
         self.resizable(True, True)
         self.configure(fg_color=BG_DEEP)
 
+        # Set window / dock icon
+        _assets_dir = Path(__file__).resolve().parent.parent / "assets"
+        for _icon_name in ("logo.png", "icon.png"):
+            _icon_path = _assets_dir / _icon_name
+            if _icon_path.exists():
+                try:
+                    from PIL import Image as _PI, ImageTk as _ITk
+                    _pil_icon = _PI.open(str(_icon_path)).convert("RGBA").resize((64, 64))
+                    _tk_icon  = _ITk.PhotoImage(_pil_icon)
+                    self.iconphoto(True, _tk_icon)  # type: ignore[arg-type]
+                    self._icon_ref = _tk_icon   # keep reference so GC doesn't collect it
+                except Exception:
+                    pass
+                break
+
         self._build_menu()
         self._build_ui()
         self._start_poll()
@@ -333,7 +348,25 @@ class AuraVoiceApp(ctk.CTk):
         )
         self._model_pill.pack(side="left", padx=(0, PAD["md"]))
 
-        # App name
+        # App logo — try logo.png, fall back to text
+        _assets = Path(__file__).resolve().parent.parent / "assets"
+        _logo_img = None
+        for _fname in ("logo.png", "icon.png"):
+            _p = _assets / _fname
+            if _p.exists():
+                try:
+                    from PIL import Image as _PILImage
+                    _pil = _PILImage.open(str(_p)).convert("RGBA")
+                    _logo_img = ctk.CTkImage(light_image=_pil, dark_image=_pil, size=(32, 32))
+                    break
+                except Exception:
+                    pass
+
+        if _logo_img:
+            ctk.CTkLabel(brand, text="", image=_logo_img,
+                         fg_color="transparent").pack(side="left", padx=(0, 6))
+
+        # App name text
         ctk.CTkLabel(
             brand,
             text=APP_NAME,
