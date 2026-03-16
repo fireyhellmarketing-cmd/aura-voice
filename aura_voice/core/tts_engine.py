@@ -101,14 +101,15 @@ LANGUAGE_CODES: Dict[str, str] = {
 }
 
 
-def _get_torch_device() -> str:
-    """Return 'mps' on Apple Silicon, else 'cpu'."""
-    try:
-        import torch
-        if torch.backends.mps.is_available():
-            return "mps"
-    except Exception:
-        pass
+def _get_torch_device(allow_mps: bool = True) -> str:
+    """Return 'mps' on Apple Silicon (if allowed), else 'cpu'."""
+    if allow_mps:
+        try:
+            import torch
+            if torch.backends.mps.is_available():
+                return "mps"
+        except Exception:
+            pass
     return "cpu"
 
 
@@ -284,10 +285,15 @@ class TTSEngine:
         try:
             if progress_callback:
                 progress_callback("Loading Chatterbox TTS…")
+            import warnings
             from chatterbox.tts import ChatterboxTTS
-            device = _get_torch_device()
+            # Chatterbox vocoder/flow-matching pipeline is not fully MPS-compatible;
+            # use CPU to avoid 'NoneType not callable' errors on Apple Silicon
+            device = "cpu"
             print(f"[Chatterbox] Loading on device: {device}")
-            model = ChatterboxTTS.from_pretrained(device=device)
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", category=FutureWarning)
+                model = ChatterboxTTS.from_pretrained(device=device)
             with self._chatterbox_lock:
                 self._chatterbox_model  = model
                 self._chatterbox_loaded = True
@@ -369,10 +375,14 @@ class TTSEngine:
         if progress_callback:
             progress_callback("Loading Chatterbox for voice cloning…")
         try:
+            import warnings
             from chatterbox.tts import ChatterboxTTS
-            device = _get_torch_device()
+            # Force CPU — MPS vocoder path raises 'NoneType not callable' on macOS
+            device = "cpu"
             print(f"[Chatterbox] Loading cloning engine on {device}…")
-            model = ChatterboxTTS.from_pretrained(device=device)
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", category=FutureWarning)
+                model = ChatterboxTTS.from_pretrained(device=device)
             with self._chatterbox_lock:
                 self._chatterbox_model  = model
                 self._chatterbox_loaded = True
